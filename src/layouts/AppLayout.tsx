@@ -2,6 +2,7 @@ import { Download, Heart, History, Home, Info, ListVideo, Settings, Timer } from
 import { NavLink, Outlet } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ROUTES } from "../constants/routes";
+import { DevToolsPanel } from "../components/DevToolsPanel";
 import { useQueueStore } from "../stores/queueStore";
 
 const navItems = [
@@ -68,6 +69,7 @@ export function AppLayout() {
           <Outlet />
         </main>
       </div>
+      {import.meta.env.DEV ? <DevToolsPanel /> : null}
     </div>
   );
 }

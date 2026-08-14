@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import i18n from "../i18n";
-import { settingsService } from "../services/settingsService";
+import { resolveSettingsService } from "../services/serviceResolver";
 import type { AppSettings } from "../types/settings";
 
 interface SettingsState {
@@ -20,22 +20,24 @@ export function applyDocumentPreferences(settings: AppSettings): void {
   void i18n.changeLanguage(settings.language);
 }
 
-const initialSettings = settingsService.get();
+// Resolved once at module load — LocalStorageSettingsService in Web/Electron mode.
+// See serviceResolver.ts for the documented sync/async trade-off.
+const initialSettings = resolveSettingsService().get();
 
 export const useSettingsStore = create<SettingsState>((set) => ({
   settings: initialSettings,
   updateSettings: (settings) => {
-    const nextSettings = settingsService.update(settings);
+    const nextSettings = resolveSettingsService().update(settings);
     applyDocumentPreferences(nextSettings);
     set({ settings: nextSettings });
   },
   resetSettings: () => {
-    const nextSettings = settingsService.reset();
+    const nextSettings = resolveSettingsService().reset();
     applyDocumentPreferences(nextSettings);
     set({ settings: nextSettings });
   },
   reloadSettings: () => {
-    const nextSettings = settingsService.get();
+    const nextSettings = resolveSettingsService().get();
     applyDocumentPreferences(nextSettings);
     set({ settings: nextSettings });
   }

@@ -20,7 +20,14 @@ describe("AboutPage", () => {
     expect(screen.getByText("Developer")).toBeInTheDocument();
     expect(screen.getByText("Remon")).toBeInTheDocument();
     expect(screen.getByText("Contact")).toBeInTheDocument();
-    expect(screen.getByText("Not specified")).toBeInTheDocument();
+    expect(screen.getByText("Phone:")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "01067006714" })).toHaveAttribute("href", "tel:01067006714");
+    expect(screen.getByText("Email:")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "remongamal282@gmail.com" })).toHaveAttribute(
+      "href",
+      "mailto:remongamal282@gmail.com"
+    );
+    expect(screen.queryByText("Not specified")).not.toBeInTheDocument();
   });
 
   it("renders localized Arabic labels", async () => {
@@ -34,6 +41,13 @@ describe("AboutPage", () => {
     expect(screen.getByText("الإصدار")).toBeInTheDocument();
     expect(screen.getByText("المطور")).toBeInTheDocument();
     expect(screen.getByText("التواصل")).toBeInTheDocument();
-    expect(screen.getByText("غير محدد")).toBeInTheDocument();
+    expect(screen.getByText("الهاتف:")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "01067006714" })).toHaveAttribute("href", "tel:01067006714");
+    expect(screen.getByText("البريد الإلكتروني:")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "remongamal282@gmail.com" })).toHaveAttribute(
+      "href",
+      "mailto:remongamal282@gmail.com"
+    );
+    expect(screen.queryByText("غير محدد")).not.toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { historyService } from "../services/historyService";
+import { resolveHistoryService } from "../services/serviceResolver";
 import type { DownloadItem, HistoryItem } from "../types/download";
 import type { ErrorModel } from "../types/errors";
 import { useQueueStore } from "./queueStore";
@@ -39,7 +39,7 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const items = await historyService.getAll();
+      const items = await resolveHistoryService().getAll();
       set({ items, isLoading: false });
     } catch (error) {
       set({ error: toErrorModel(error), isLoading: false });
@@ -47,7 +47,7 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
   },
   addFromDownload: async (item, now = new Date().toISOString()) => {
     try {
-      const historyItem = await historyService.addFromDownload(item, now);
+      const historyItem = await resolveHistoryService().addFromDownload(item, now);
       set((state) => ({
         items: [historyItem, ...state.items.filter((existingItem) => existingItem.id !== historyItem.id)],
         error: null
@@ -60,7 +60,7 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
   },
   remove: async (id) => {
     try {
-      await historyService.remove(id);
+      await resolveHistoryService().remove(id);
       set((state) => ({ items: state.items.filter((item) => item.id !== id), error: null }));
     } catch (error) {
       set({ error: toErrorModel(error) });
@@ -68,7 +68,7 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
   },
   clear: async () => {
     try {
-      await historyService.clear();
+      await resolveHistoryService().clear();
       set({ items: [], error: null });
     } catch (error) {
       set({ error: toErrorModel(error) });
@@ -107,10 +107,10 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
 
     return true;
   },
-  failNext: (error) => historyService.failNext(error),
+  failNext: (error) => resolveHistoryService().failNext(error),
   clearError: () => set({ error: null }),
   resetForTests: () => {
-    void historyService.clear();
+    void resolveHistoryService().clear();
     set({ items: [], isLoading: false, error: null });
   }
 }));

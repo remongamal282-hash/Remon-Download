@@ -249,7 +249,37 @@ export const resources = {
         details: "Application details",
         developer: "Developer",
         contact: "Contact",
-        contactNotSpecified: "Not specified"
+        phone: "Phone",
+        email: "Email"
+      },
+      devTools: {
+        title: "Dev Tools",
+        shortcut: "Ctrl + Shift + D",
+        close: "Close Dev Tools",
+        mockScenario: "Mock Scenario",
+        simulationSpeed: "Simulation Speed",
+        seedDemoData: "Seed Demo Data",
+        clearMockData: "Clear Mock Data",
+        resetSettings: "Reset Settings",
+        simulateDownload: "Simulate Download",
+        simulateError: "Simulate Error",
+        speedValue: "{{speed}}x",
+        scenarios: {
+          success: "Success",
+          network_error: "Network Error",
+          video_unavailable: "Video Unavailable",
+          disk_full: "Disk Full",
+          permission_denied: "Permission Denied",
+          ytdlp_error: "yt-dlp Error",
+          ffmpeg_error: "FFmpeg Error"
+        },
+        toast: {
+          seeded: "Demo queue data added.",
+          cleared: "Mock data cleared.",
+          settingsReset: "Settings reset.",
+          simulatedDownload: "Mock download added.",
+          errorSimulated: "Mock error simulated."
+        }
       }
     }
   },
@@ -500,7 +530,37 @@ export const resources = {
         details: "تفاصيل التطبيق",
         developer: "المطور",
         contact: "التواصل",
-        contactNotSpecified: "غير محدد"
+        phone: "الهاتف",
+        email: "البريد الإلكتروني"
+      },
+      devTools: {
+        title: "أدوات التطوير",
+        shortcut: "Ctrl + Shift + D",
+        close: "إغلاق أدوات التطوير",
+        mockScenario: "سيناريو المحاكاة",
+        simulationSpeed: "سرعة المحاكاة",
+        seedDemoData: "إضافة بيانات تجريبية",
+        clearMockData: "مسح بيانات المحاكاة",
+        resetSettings: "إعادة ضبط الإعدادات",
+        simulateDownload: "محاكاة تنزيل",
+        simulateError: "محاكاة خطأ",
+        speedValue: "{{speed}}x",
+        scenarios: {
+          success: "نجاح",
+          network_error: "خطأ شبكة",
+          video_unavailable: "الفيديو غير متاح",
+          disk_full: "القرص ممتلئ",
+          permission_denied: "رفض الصلاحيات",
+          ytdlp_error: "خطأ yt-dlp",
+          ffmpeg_error: "خطأ FFmpeg"
+        },
+        toast: {
+          seeded: "تمت إضافة بيانات تجريبية للقائمة.",
+          cleared: "تم مسح بيانات المحاكاة.",
+          settingsReset: "تمت إعادة ضبط الإعدادات.",
+          simulatedDownload: "تمت إضافة تنزيل تجريبي.",
+          errorSimulated: "تمت محاكاة الخطأ التجريبي."
+        }
       }
     }
   }
@@ -516,3 +576,4 @@ void i18n.use(initReactI18next).init({
 });
 
 export default i18n;
+

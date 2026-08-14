@@ -1,5 +1,86 @@
 # Changelog
 
+## 1.1.1-store-wiring
+
+Added:
+- `src/services/serviceResolver.ts` extended with `resolveDownloadService()` and `resolveSettingsService()` — all 6 service namespaces now covered.
+- `src/services/serviceResolver.ts` extended with per-service `_inject*Service()` test helpers (`_injectMetadataService`, `_injectDownloadService`, `_injectHistoryService`, `_injectFavoritesService`, `_injectSchedulerService`, `_injectSettingsService`).
+- `src/services/serviceResolver.test.ts`: 26 new tests covering Web/Mock mode, Electron mode, singleton caching, test injection helpers, and adapter surface validation for all 4 Electron adapters.
+
+Changed:
+- `src/stores/metadataStore.ts`: Replaced direct `metadataService` singleton import with `resolveMetadataService()`.
+- `src/stores/queueStore.ts`: Replaced direct `downloadService` singleton import with `resolveDownloadService()`.
+- `src/stores/historyStore.ts`: Replaced direct `historyService` singleton import with `resolveHistoryService()`.
+- `src/stores/favoritesStore.ts`: Replaced direct `favoritesService` singleton import with `resolveFavoritesService()`.
+- `src/stores/schedulerStore.ts`: Replaced direct `schedulerService` singleton import with `resolveSchedulerService()`.
+- `src/stores/settingsStore.ts`: Replaced direct `settingsService` singleton import with `resolveSettingsService()`.
+- Architecture rule now enforced: No Zustand store imports a Mock or Native service class directly. All service access routes through `serviceResolver`.
+
+Fixed:
+- `resolveSettingsService()` is documented to always return `LocalStorageSettingsService` (sync interface, IPC is async). See `AI_HANDOFF.md` "Known Architectural Decision Pending".
+
+Test Results:
+- `npm run test`: **26 test files, 147 tests, 0 failed** ✅
+- `npm run build`: ✅ zero errors (tsc -b + vite build, 1668 modules)
+- `npm run electron:build`: ✅ esbuild compiles `main.ts` + `preload.ts` → `dist-electron/` in ~155ms
+
+## 1.1.0-electron-foundation
+
+Added:
+- `electron/` directory with full IPC foundation for Phase 2 Electron integration.
+- `electron/ipc/channels.ts`: Typed `IPC_CHANNELS` registry — 25 channels across 6 namespaces (metadata, download, settings, history, favorites, scheduler). `IpcResult<T>` envelope, `IpcContractPayloads`, and `IpcContractResponses` contracts.
+- `electron/ipc/handlers.ts`: `registerIpcHandlers()` wiring all `ipcMain.handle` calls with safe `wrapSuccess`/`wrapError` error propagation.
+- `electron/preload.ts`: Secure preload using `contextBridge.exposeInMainWorld('electronAPI', ...)` with typed invoke helper. No raw `ipcRenderer` or Node.js APIs exposed to Renderer.
+- `electron/main.ts`: `BrowserWindow` with `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, `webSecurity: true`. Loads Vite dev server in development or `dist/index.html` in production.
+- `electron/services/nativeMetadataService.ts`: Node.js-compatible stub (no browser APIs, no `window.setTimeout`).
+- `electron/services/nativeDownloadService.ts`: In-memory download queue boundary for Main Process.
+- `electron/services/nativeSettingsService.ts`: In-memory settings boundary for Main Process.
+- `electron/services/nativeHistoryService.ts`: In-memory history boundary for Main Process.
+- `electron/services/nativeFavoritesService.ts`: In-memory favorites boundary for Main Process.
+- `electron/services/nativeSchedulerService.ts`: In-memory scheduler boundary for Main Process.
+- `src/types/electron.d.ts`: Self-contained `ElectronAPI` interface + `Window.electronAPI` optional global type augmentation.
+- `src/services/electronIpcAdapters.ts`: Renderer-side IPC adapter implementations of all service interfaces using `window.electronAPI`.
+- `src/services/serviceResolver.ts`: Dual-mode factory — selects Electron IPC adapters when `window.electronAPI` is defined; Mock services otherwise. Includes `_resetServiceCache()` and `_injectServices()` test helpers.
+- `tsconfig.electron.json`: TypeScript config for compiling Main Process (CommonJS, Node target, strict).
+- `electron/ipc/ipc.test.ts`: 27 IPC contract tests covering channel naming, `IpcResult` envelope, preload surface detection, dual-mode resolver selection, error propagation, and security constraints — runnable under Vitest without a live Electron instance.
+- `package.json` updated: `electron:build` (esbuild → `dist-electron/`), `electron:start` (Electron launcher), `"main"` entry for Electron.
+
+Fixed:
+- `nativeMetadataService.ts` now uses only Node.js-compatible APIs (no `window.setTimeout`, no DOM APIs).
+- `electron.d.ts` now self-contained (no circular import from `electron/preload.ts`).
+
+Test Results:
+- `npm run test`: **25 test files, 121 tests, 0 failed** ✅
+- `npm run build`: ✅ zero errors (tsc -b + vite build, 1666 modules, 14.78s)
+- `npm run electron:build`: ✅ esbuild compiles `main.ts` + `preload.ts` → `dist-electron/` in 55ms
+
+## 1.0.0
+
+Added:
+- Full Acceptance Testing & Final Prototype Verification suite (`DashboardPage.test.tsx`).
+- Verified acceptance checklist across all 7 core pages, Dev Tools, state machine transitions, persistence rules, localization, accessibility, and mock error handling.
+
+Fixed:
+- Confirmed `npm run test` passes with 24 test files and 94 tests.
+- Confirmed `npm run build` passes with zero errors (`tsc -b && vite build`).
+
+## 0.8.0
+
+Added:
+- Development-only Dev Tools panel toggled with `Ctrl + Shift + D`.
+- SPEC-defined Mock Scenario selector for Success, Network Error, Video Unavailable, Disk Full, Permission Denied, yt-dlp Error, and FFmpeg Error.
+- Simulation Speed selector that drives the existing Queue mock simulation interval in development only.
+- Dev Tools controls for Seed Demo Data, Clear Mock Data, Reset Settings, Simulate Download, and Simulate Error.
+- Focused Dev Tools store and component tests.
+
+Changed:
+- About contact now displays concrete phone and email links instead of localized placeholder text.
+- Favorites and Scheduler stores expose `clearMockData` actions for development-only mock clearing through stores.
+
+Fixed:
+- Confirmed `npm run test` passes with 23 test files and 91 tests.
+- Confirmed `npm run build` passes, including `tsc -b`.
+
 ## 0.7.0
 
 Added:
@@ -7,7 +88,7 @@ Added:
 
 Changed:
 - Polished About page layout, spacing, typography, and responsive details grid.
-- About page now removes placeholder contact text and displays a localized not-specified contact status when no contact is defined in project metadata or `docs/SPEC.md`.
+- About page now removes placeholder contact text and displays concrete phone/email contact links.
 
 Fixed:
 - Confirmed `npm run test` passes with 21 test files and 81 tests.

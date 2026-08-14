@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { downloadService } from "../services/downloadService";
+import { resolveDownloadService } from "../services/serviceResolver";
 import type { DownloadItem, DownloadStatus, FavoriteItem, HistoryItem, VideoMetadata } from "../types/download";
 import type { AppErrorCode, ErrorModel } from "../types/errors";
 import type { SpeedLimit } from "../types/settings";
@@ -71,7 +71,7 @@ function fillAvailableSlots(items: DownloadItem[], concurrentDownloads: number, 
     }
 
     remainingSlots -= 1;
-    return downloadService.transition(item, "analyzing", now);
+    return resolveDownloadService().transition(item, "analyzing", now);
   });
 }
 
@@ -80,34 +80,34 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   lastError: null,
   addFromMetadata: (metadata, quality, format) => {
     const order = get().items.length + 1;
-    const item = downloadService.createFromMetadata(metadata, order, quality, format);
+    const item = resolveDownloadService().createFromMetadata(metadata, order, quality, format);
     set((state) => ({ items: [...state.items, item] }));
     return item;
   },
   addManyFromMetadata: (metadata, quality, format) => {
     const startOrder = get().items.length + 1;
     const items = metadata.map((video, index) =>
-      downloadService.createFromMetadata(video, startOrder + index, quality, format)
+      resolveDownloadService().createFromMetadata(video, startOrder + index, quality, format)
     );
     set((state) => ({ items: [...state.items, ...items] }));
     return items;
   },
   addFromHistoryItem: (historyItem) => {
     const order = get().items.length + 1;
-    const item = downloadService.createFromHistoryItem(historyItem, order);
+    const item = resolveDownloadService().createFromHistoryItem(historyItem, order);
     set((state) => ({ items: [...state.items, item] }));
     return item;
   },
   addFromFavoriteItem: (favoriteItem, quality, format) => {
     const order = get().items.length + 1;
-    const item = downloadService.createFromFavoriteItem(favoriteItem, order, quality, format);
+    const item = resolveDownloadService().createFromFavoriteItem(favoriteItem, order, quality, format);
     set((state) => ({ items: [...state.items, item] }));
     return item;
   },
   pause: (id) => {
     set((state) => {
       const result = safeUpdateItem(state.items, id, (item) =>
-        downloadService.transition(item, "paused", Date.now())
+        resolveDownloadService().transition(item, "paused", Date.now())
       );
       return { items: result.items, lastError: result.error };
     });
@@ -115,7 +115,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   resume: (id) => {
     set((state) => {
       const result = safeUpdateItem(state.items, id, (item) =>
-        downloadService.transition(item, "downloading", Date.now())
+        resolveDownloadService().transition(item, "downloading", Date.now())
       );
       return { items: result.items, lastError: result.error };
     });
@@ -123,21 +123,21 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   cancel: (id) => {
     set((state) => {
       const result = safeUpdateItem(state.items, id, (item) =>
-        downloadService.transition(item, "canceled", Date.now())
+        resolveDownloadService().transition(item, "canceled", Date.now())
       );
       return { items: result.items, lastError: result.error };
     });
   },
   retry: (id) => {
     set((state) => {
-      const result = safeUpdateItem(state.items, id, (item) => downloadService.retry(item, Date.now()));
+      const result = safeUpdateItem(state.items, id, (item) => resolveDownloadService().retry(item, Date.now()));
       return { items: result.items, lastError: result.error };
     });
   },
   simulateError: (id, code) => {
     set((state) => {
       const error = mapMockError(code);
-      const result = safeUpdateItem(state.items, id, (item) => downloadService.fail(item, error, Date.now()));
+      const result = safeUpdateItem(state.items, id, (item) => resolveDownloadService().fail(item, error, Date.now()));
       return { items: result.items, lastError: result.error ?? error };
     });
   },
@@ -159,7 +159,7 @@ export const useQueueStore = create<QueueState>((set, get) => ({
   },
   tick: (concurrentDownloads, speedLimit, now = Date.now()) => {
     set((state) => {
-      const advancedItems = state.items.map((item) => downloadService.tick(item, now, speedLimit));
+      const advancedItems = state.items.map((item) => resolveDownloadService().tick(item, now, speedLimit));
       const refillableItems = advancedItems.some((item, index) => item.status !== state.items[index]?.status)
         ? fillAvailableSlots(advancedItems, concurrentDownloads, now)
         : advancedItems;

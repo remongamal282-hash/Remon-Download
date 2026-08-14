@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { metadataService } from "../services/metadataService";
+import { resolveMetadataService } from "../services/serviceResolver";
 import type { AnalysisResult } from "../types/download";
 import type { ErrorModel } from "../types/errors";
 
@@ -39,7 +39,7 @@ export const useMetadataStore = create<MetadataState>((set, get) => ({
     set({ isAnalyzing: true, error: null });
 
     try {
-      const result = await metadataService.analyze(url);
+      const result = await resolveMetadataService().analyze(url);
       set({ result, isAnalyzing: false });
       return result;
     } catch (error) {

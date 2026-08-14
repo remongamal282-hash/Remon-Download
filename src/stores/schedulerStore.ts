@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { schedulerService, type SchedulerInput } from "../services/schedulerService";
+import { resolveSchedulerService } from "../services/serviceResolver";
+import type { SchedulerInput } from "../services/schedulerService";
 import type { ScheduledDownload } from "../types/download";
 import type { ErrorModel } from "../types/errors";
 import { useQueueStore } from "./queueStore";
@@ -18,6 +19,7 @@ interface SchedulerState {
   tick: (now?: number) => Promise<number>;
   failNext: (error: ErrorModel) => void;
   clearError: () => void;
+  clearMockData: () => Promise<void>;
   resetForTests: () => Promise<void>;
 }
 
@@ -33,7 +35,7 @@ function toErrorModel(error: unknown): ErrorModel {
   };
 }
 
-export const useSchedulerStore = create<SchedulerState>((set) => ({
+export const useSchedulerStore = create<SchedulerState>((set, get) => ({
   items: [],
   isLoading: false,
   error: null,
@@ -42,7 +44,7 @@ export const useSchedulerStore = create<SchedulerState>((set) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const items = await schedulerService.getAll();
+      const items = await resolveSchedulerService().getAll();
       set({ items, isLoading: false });
     } catch (error) {
       set({ error: toErrorModel(error), isLoading: false });
@@ -50,7 +52,7 @@ export const useSchedulerStore = create<SchedulerState>((set) => ({
   },
   create: async (input) => {
     try {
-      const item = await schedulerService.create(input);
+      const item = await resolveSchedulerService().create(input);
       set((state) => ({ items: [item, ...state.items], error: null }));
       return item;
     } catch (error) {
@@ -60,7 +62,7 @@ export const useSchedulerStore = create<SchedulerState>((set) => ({
   },
   update: async (id, input) => {
     try {
-      const item = await schedulerService.update(id, input);
+      const item = await resolveSchedulerService().update(id, input);
       set((state) => ({
         items: state.items.map((existingItem) => (existingItem.id === id ? item : existingItem)),
         error: null
@@ -73,7 +75,7 @@ export const useSchedulerStore = create<SchedulerState>((set) => ({
   },
   cancel: async (id) => {
     try {
-      const item = await schedulerService.cancel(id);
+      const item = await resolveSchedulerService().cancel(id);
       set((state) => ({
         items: state.items.map((existingItem) => (existingItem.id === id ? item : existingItem)),
         error: null
@@ -84,7 +86,7 @@ export const useSchedulerStore = create<SchedulerState>((set) => ({
   },
   remove: async (id) => {
     try {
-      await schedulerService.remove(id);
+      await resolveSchedulerService().remove(id);
       set((state) => ({ items: state.items.filter((item) => item.id !== id), error: null }));
     } catch (error) {
       set({ error: toErrorModel(error) });
@@ -92,7 +94,7 @@ export const useSchedulerStore = create<SchedulerState>((set) => ({
   },
   tick: async (now = Date.now()) => {
     try {
-      const result = await schedulerService.tick(now);
+      const result = await resolveSchedulerService().tick(now);
       const settings = useSettingsStore.getState().settings;
 
       result.triggered.forEach((triggered) => {
@@ -116,10 +118,13 @@ export const useSchedulerStore = create<SchedulerState>((set) => ({
       return 0;
     }
   },
-  failNext: (error) => schedulerService.failNext(error),
+  failNext: (error) => resolveSchedulerService().failNext(error),
   clearError: () => set({ error: null, lastTriggeredId: null }),
-  resetForTests: async () => {
-    await schedulerService.clear();
+  clearMockData: async () => {
+    await resolveSchedulerService().clear();
     set({ items: [], isLoading: false, error: null, lastTriggeredId: null });
+  },
+  resetForTests: async () => {
+    await get().clearMockData();
   }
 }));

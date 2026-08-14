@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { favoritesService } from "../services/favoritesService";
+import { resolveFavoritesService } from "../services/serviceResolver";
 import type { FavoriteItem } from "../types/download";
 import type { ErrorModel } from "../types/errors";
 import { useQueueStore } from "./queueStore";
@@ -15,6 +15,7 @@ interface FavoritesState {
   download: (id: string, quality: string, format: string) => boolean;
   failNext: (error: ErrorModel) => void;
   clearError: () => void;
+  clearMockData: () => Promise<void>;
   resetForTests: () => Promise<void>;
 }
 
@@ -38,7 +39,7 @@ export const useFavoritesStore = create<FavoritesState>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const items = await favoritesService.getAll();
+      const items = await resolveFavoritesService().getAll();
       set({ items, isLoading: false });
     } catch (error) {
       set({ error: toErrorModel(error), isLoading: false });
@@ -46,7 +47,7 @@ export const useFavoritesStore = create<FavoritesState>((set, get) => ({
   },
   add: async (item) => {
     try {
-      const favorite = await favoritesService.add(item);
+      const favorite = await resolveFavoritesService().add(item);
       set((state) => ({
         items: [favorite, ...state.items.filter((existingItem) => existingItem.sourceUrl !== favorite.sourceUrl)],
         error: null
@@ -59,7 +60,7 @@ export const useFavoritesStore = create<FavoritesState>((set, get) => ({
   },
   remove: async (id) => {
     try {
-      await favoritesService.remove(id);
+      await resolveFavoritesService().remove(id);
       set((state) => ({ items: state.items.filter((item) => item.id !== id), error: null }));
     } catch (error) {
       set({ error: toErrorModel(error) });
@@ -67,7 +68,7 @@ export const useFavoritesStore = create<FavoritesState>((set, get) => ({
   },
   isFavorite: async (sourceUrl) => {
     try {
-      const result = await favoritesService.isFavorite(sourceUrl);
+      const result = await resolveFavoritesService().isFavorite(sourceUrl);
       set({ error: null });
       return result;
     } catch (error) {
@@ -92,10 +93,13 @@ export const useFavoritesStore = create<FavoritesState>((set, get) => ({
     useQueueStore.getState().addFromFavoriteItem(item, quality, format);
     return true;
   },
-  failNext: (error) => favoritesService.failNext(error),
+  failNext: (error) => resolveFavoritesService().failNext(error),
   clearError: () => set({ error: null }),
-  resetForTests: async () => {
-    await favoritesService.clear();
+  clearMockData: async () => {
+    await resolveFavoritesService().clear();
     set({ items: [], isLoading: false, error: null });
+  },
+  resetForTests: async () => {
+    await get().clearMockData();
   }
 }));

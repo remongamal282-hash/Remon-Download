@@ -1,13 +1,15 @@
 import { useTranslation } from "react-i18next";
 import { Download, Info } from "lucide-react";
 
+const CONTACT_PHONE = "01067006714";
+const CONTACT_EMAIL = "remongamal282@gmail.com";
+
 export function AboutPage() {
   const { t } = useTranslation();
   const details = [
     { label: t("about.applicationName"), value: t("app.name") },
     { label: t("common.version"), value: __APP_VERSION__ },
-    { label: t("about.developer"), value: "Remon" },
-    { label: t("about.contact"), value: t("about.contactNotSpecified") }
+    { label: t("about.developer"), value: "Remon" }
   ];
 
   return (
@@ -41,6 +43,23 @@ export function AboutPage() {
               <dd className="mt-2 break-words font-medium">{detail.value}</dd>
             </div>
           ))}
+          <div className="rounded-md border border-slate-200 p-4 dark:border-slate-800">
+            <dt className="text-slate-500 dark:text-slate-400">{t("about.contact")}</dt>
+            <dd className="mt-2 space-y-2 break-words font-medium">
+              <div>
+                <span className="text-slate-500 dark:text-slate-400">{t("about.phone")}: </span>
+                <a className="text-brand-700 hover:underline dark:text-brand-50" href={`tel:${CONTACT_PHONE}`} dir="ltr">
+                  {CONTACT_PHONE}
+                </a>
+              </div>
+              <div>
+                <span className="text-slate-500 dark:text-slate-400">{t("about.email")}: </span>
+                <a className="text-brand-700 hover:underline dark:text-brand-50" href={`mailto:${CONTACT_EMAIL}`} dir="ltr">
+                  {CONTACT_EMAIL}
+                </a>
+              </div>
+            </dd>
+          </div>
         </dl>
       </section>
     </section>
