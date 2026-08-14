@@ -12,6 +12,8 @@ export interface DownloadService {
   retry(item: DownloadItem, now: number): DownloadItem;
   fail(item: DownloadItem, error: ErrorModel, now: number): DownloadItem;
   tick(item: DownloadItem, now: number, speedLimit: SpeedLimit): DownloadItem;
+  // Optional: Subscribe to item updates (for Electron mode integration)
+  onItemUpdate?(callback: (id: string, item: DownloadItem) => void): () => void;
 }
 
 export class MockDownloadService implements DownloadService {

@@ -94,4 +94,4 @@ var electronAPI = {
   }
 };
 import_electron.contextBridge.exposeInMainWorld("electronAPI", electronAPI);
-//# sourceMappingURL=preload.js.map
+//# sourceMappingURL=preload.cjs.map

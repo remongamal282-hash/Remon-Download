@@ -12,7 +12,7 @@ function createWindow(): void {
     minHeight: 600,
     title: "Remon Download",
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
+      preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,

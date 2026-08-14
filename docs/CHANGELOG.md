@@ -1,5 +1,90 @@
 # Changelog
 
+## 1.1.5-native-download (Phase 2.x Complete)
+
+Added:
+- **Native Download Integration**: Complete end-to-end real download system using yt-dlp subprocess.
+- **NativeDownloadService** (752 lines):
+  - Real yt-dlp subprocess spawning with progress parsing.
+  - Pause strategy: Kill process + preserve .part file. Resume: Restart with `--continue` flag.
+  - Concurrent download slot management (respects user-configured limit).
+  - Quality/format selection: `bestvideo[height<=N]+bestaudio` with `--merge-output-format mp4/webm`.
+  - Progress parsing: Regex-based parsing of yt-dlp human-readable output (`15.2%|1.5MiB|10MiB|500KiB/s|00:15`).
+  - Status transitions: queued → analyzing → downloading → merging → converting → completed/failed.
+  - Error handling: spawn failures, network errors, video unavailable, yt-dlp not found, concurrent limit exceeded.
+  - FFmpeg location support via settings.
+  - Speed limit support via `-r` flag.
+  - Extension fix: `--remux-video` ensures correct single extension (e.g., `.mp4`, not `.mp4.webm`).
+- **IPC Events** (download:progress, download:state-change): Push events from Main → Renderer for real-time updates.
+- **ElectronDownloadService** (Renderer-side IPC adapter):
+  - Event-driven architecture: Subscribes to IPC events in constructor (onProgress, onStateChange).
+  - Local cache (`itemsCache`) updated on IPC events.
+  - `onItemUpdate()` callback mechanism to notify subscribers (e.g., queueStore).
+  - `transition()` method maps user actions to IPC commands (start/pause/resume/cancel/retry).
+  - `tick()` is no-op in Electron mode (returns cached item, no polling).
+- **queueStore Integration**:
+  - Subscribes to `ElectronDownloadService.onItemUpdate()` in constructor.
+  - Real-time updates: IPC events → ElectronDownloadService → queueStore.items → UI re-render.
+  - `fillAvailableSlots()` transitions queued → analyzing, which triggers `start()` via IPC.
+  - Works seamlessly with both Mock (web) and Electron modes.
+- **Download IPC Integration Tests** (`electron/ipc/downloadIpc.test.ts`): 28 tests covering:
+  - IPC channel contract validation.
+  - Download operations (add, start, pause, resume, cancel, retry, remove, reorder).
+  - Error propagation (item not found, concurrent limit, yt-dlp not found).
+  - Progress and state-change events.
+  - Concurrent download management.
+- **NativeDownloadService Tests** (`electron/services/nativeDownloadService.test.ts`): 28 tests covering:
+  - yt-dlp path resolution.
+  - Download lifecycle (start, pause, resume, cancel, retry, remove).
+  - Progress parsing from yt-dlp output.
+  - State transitions.
+  - Error handling (spawn failures, timeouts, network errors, video unavailable).
+  - Concurrent downloads.
+  - yt-dlp arguments construction.
+  - Settings updates.
+  - Cleanup.
+
+Changed:
+- **Progress Template**: Updated to use human-readable format (`%(progress._percent_str)s`) instead of raw bytes.
+- **Progress Parser**: Added `parseSize()` helper to convert human-readable sizes (e.g., "1.5MiB") to bytes.
+- **Build Configuration**: Added `--format=cjs --out-extension:.js=.cjs` to esbuild, updated `package.json` main entry to `main.cjs`, fixed preload path reference to `preload.cjs`.
+- **fillAvailableSlots()**: Now correctly triggers `start()` via `transition(queued → analyzing)` which calls IPC start command.
+
+Fixed:
+- **ES Module Error**: Fixed "require is not defined in ES module scope" by outputting `.cjs` files for Electron Main Process.
+- **Double Extension**: Fixed `.mp4.webm` issue by adding `--remux-video` flag to ensure correct format.
+- **Progress Events Not Reaching UI**: Fixed by implementing `onItemUpdate()` callback mechanism in ElectronDownloadService and subscribing in queueStore.
+- **Concurrent Download Logic**: Fixed activeCount to count only ["downloading", "merging", "converting"], not "analyzing".
+
+Verified (Manual E2E Testing):
+- ✅ Real YouTube video downloaded successfully (Me at the zoo - 191 KB).
+- ✅ Progress displayed real-time in UI (speed, ETA, downloaded size).
+- ✅ Status transitions: queued → analyzing → downloading → completed.
+- ✅ File exists on disk with correct extension (`.webm` for test video).
+- ✅ Failed downloads show proper error messages ("Video not found or access denied").
+- ✅ History page populated automatically with completed/failed items.
+- ✅ Concurrent downloads respect configured limit.
+- ✅ QueueHistoryBridge automatically moves completed/failed items to History.
+
+Test Results:
+- `npm run test`: **30 test files, 246 tests, 0 failed** ✅
+- `npm run build`: ✅ zero errors (tsc -b + vite build)
+- `npm run electron:build`: ✅ zero errors (main.cjs + preload.cjs)
+- **Manual verification**: Real downloads working end-to-end ✅
+
+Architecture Notes:
+- **Event-Driven**: Progress updates are event-driven (IPC), not polling-based.
+- **Separation of Concerns**: Main Process (NativeDownloadService) handles yt-dlp, Renderer (ElectronDownloadService) handles UI state.
+- **Backward Compatible**: Mock mode (web) continues working without changes.
+- **Testable**: Dependency Injection (ProcessExecutor) enables deterministic tests without real yt-dlp.
+
+Known Limitations:
+- Some videos (age-restricted, geo-blocked, or heavily protected) may fail with "Video not found or access denied" - this is a yt-dlp/YouTube limitation.
+- Pause/Resume functionality architecture complete but not extensively tested manually in current session.
+- yt-dlp must be installed separately — no auto-download or bundled binary.
+
+Phase 2.x Status: **COMPLETED ✅**
+
 ## 1.1.4-ytdlp-integration
 
 Added:

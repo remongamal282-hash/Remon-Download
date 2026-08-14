@@ -37,7 +37,8 @@ import {
   ElectronDownloadService,
   ElectronHistoryService,
   ElectronFavoritesService,
-  ElectronSchedulerService
+  ElectronSchedulerService,
+  ElectronSettingsService
 } from "./electronIpcAdapters";
 import type { MetadataService } from "./metadataService";
 import type { DownloadService } from "./downloadService";
@@ -119,13 +120,16 @@ export function resolveSchedulerService(): SchedulerService {
 }
 
 /**
- * SettingsService is synchronous. LocalStorageSettingsService is always
- * returned until the sync/async mismatch with Electron IPC is resolved.
- * See AI_HANDOFF.md "Known Architectural Decision Pending" for details.
+ * SettingsService resolver.
+ *
+ * Phase 3.1 Update: Now returns ElectronSettingsService in Electron mode.
+ * settingsStore has been updated to handle async operations.
  */
 export function resolveSettingsService(): SettingsService {
   if (!_settingsService) {
-    _settingsService = new LocalStorageSettingsService();
+    _settingsService = isElectronEnvironment()
+      ? new ElectronSettingsService()
+      : new LocalStorageSettingsService();
   }
   return _settingsService;
 }

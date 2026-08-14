@@ -28,6 +28,40 @@ export function registerIpcHandlers(): void {
   const favoritesService = new NativeFavoritesService();
   const schedulerService = new NativeSchedulerService();
 
+  // Initialize services with persistent storage
+  const initServices = async () => {
+    try {
+      await settingsService.initialize();
+      console.log('[IPC] NativeSettingsService initialized');
+    } catch (err) {
+      console.error('[IPC] Failed to initialize NativeSettingsService:', err);
+    }
+
+    try {
+      await historyService.initialize();
+      console.log('[IPC] NativeHistoryService initialized');
+    } catch (err) {
+      console.error('[IPC] Failed to initialize NativeHistoryService:', err);
+    }
+
+    try {
+      await favoritesService.initialize();
+      console.log('[IPC] NativeFavoritesService initialized');
+    } catch (err) {
+      console.error('[IPC] Failed to initialize NativeFavoritesService:', err);
+    }
+
+    try {
+      await schedulerService.initialize();
+      console.log('[IPC] NativeSchedulerService initialized');
+    } catch (err) {
+      console.error('[IPC] Failed to initialize NativeSchedulerService:', err);
+    }
+  };
+
+  // Initialize on startup
+  void initServices();
+
   // Initialize NativeDownloadService with settings (async)
   let downloadService: NativeDownloadService | null = null;
   let downloadServiceReady = false;

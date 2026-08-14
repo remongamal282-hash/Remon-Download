@@ -42,6 +42,7 @@ export const useFavoritesStore = create<FavoritesState>((set, get) => ({
       const items = await resolveFavoritesService().getAll();
       set({ items, isLoading: false });
     } catch (error) {
+      console.error('[favoritesStore] Failed to load favorites:', error);
       set({ error: toErrorModel(error), isLoading: false });
     }
   },

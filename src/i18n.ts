@@ -98,6 +98,7 @@ export const resources = {
         format: "Format",
         size: "Size",
         statusLabel: "Status",
+        addToFavorites: "Add to Favorites",
         redownload: "Re-download",
         openFolder: "Open Folder",
         remove: "Remove",
@@ -108,7 +109,9 @@ export const resources = {
         },
         toast: {
           redownloaded: "Added back to queue.",
-          openFolderMock: "Open Folder is simulated in this prototype."
+          openFolderMock: "Open Folder is simulated in this prototype.",
+          addedToFavorites: "Added to favorites.",
+          addToFavoritesFailed: "Failed to add to favorites."
         },
         errors: {
           notFound: "History item was not found."
@@ -379,6 +382,7 @@ export const resources = {
         format: "الصيغة",
         size: "الحجم",
         statusLabel: "الحالة",
+        addToFavorites: "إضافة للمفضلة",
         redownload: "إعادة التنزيل",
         openFolder: "فتح المجلد",
         remove: "حذف",
@@ -390,6 +394,8 @@ export const resources = {
         toast: {
           redownloaded: "تمت الإضافة إلى القائمة مرة أخرى.",
           openFolderMock: "فتح المجلد محاكاة فقط في هذا النموذج.",
+          addedToFavorites: "تمت الإضافة للمفضلة.",
+          addToFavoritesFailed: "فشل إضافة للمفضلة."
         },
         errors: {
           notFound: "عنصر السجل غير موجود."

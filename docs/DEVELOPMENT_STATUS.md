@@ -1,10 +1,10 @@
 # Development Status
 
 Current Phase:
-Phase 2 — Electron Foundation (In Progress)
+Phase 2 — Electron Foundation (COMPLETED ✅)
 
 Current Version:
-1.1.0-electron-foundation
+1.1.5-native-download
 
 ## Phase 1 — React Prototype (COMPLETED ✅)
 
@@ -24,7 +24,7 @@ Completed:
 - Full Acceptance Testing & Final Prototype Verification completed with `DashboardPage.test.tsx` added.
 - `npm run test` passes: 24 test files, 94 tests (pre-Electron).
 
-## Phase 2 — Electron Foundation (IN PROGRESS 🔧)
+## Phase 2 — Electron Foundation (COMPLETED ✅)
 
 Completed (Phase 2 Foundation):
 - `electron` and `esbuild` installed as devDependencies.
@@ -68,6 +68,7 @@ Completed (Phase 2 — Electron Development Workflow):
   7. HMR works seamlessly — React changes update without rebuilding production bundle.
 - New dependencies added: `concurrently`, `wait-on`, `cross-env` (devDependencies).
 - Security constraints preserved: contextIsolation, no nodeIntegration, sandbox enabled.
+- **Build configuration fix**: Added `--format=cjs --out-extension:.js=.cjs` to esbuild, updated `package.json` main entry to `main.cjs`, fixed preload path reference.
 
 Completed (Phase 2 — Real Metadata: yt-dlp Integration):
 - **NativeMetadataService** now uses real yt-dlp subprocess for production metadata fetching.
@@ -82,31 +83,66 @@ Completed (Phase 2 — Real Metadata: yt-dlp Integration):
 - Architecture: `MockProcessExecutor` enables deterministic unit tests without mocking Node.js built-ins.
 - Web mode continues using `MockMetadataService` — no regressions.
 
-Test Results (Post-yt-dlp-Integration):
-- `npm run test`: 28 test files, 190 tests, 0 failed ✅
-- `npm run build`: ✅ zero errors (tsc -b + vite build, 1668 modules, ~9.4s)
-- `npm run electron:build`: ✅ esbuild compiles main.ts + preload.ts → dist-electron/ in ~32ms
+Completed (Phase 2.x — Native Download Integration):
+- **NativeDownloadService** fully integrated with yt-dlp for real video downloads.
+- Download implementation features:
+  1. Real yt-dlp subprocess spawning with progress parsing (regex-based, human-readable format).
+  2. Pause strategy: Kill process + preserve .part file. Resume: Restart with `--continue` flag.
+  3. Concurrent download slot management (respects user-configured limit).
+  4. Quality/format selection: `bestvideo[height<=N]+bestaudio` with `--merge-output-format` + `--remux-video`.
+  5. Progress events: IPC events (download:progress, download:state-change) from Main → Renderer.
+  6. Status transitions: queued → analyzing → downloading → merging → converting → completed/failed.
+  7. Error handling: spawn failures, network errors, video unavailable, yt-dlp not found, concurrent limit exceeded.
+  8. FFmpeg location support via settings.
+  9. Speed limit support via `-r` flag.
+  10. Extension fix: `--remux-video` ensures correct single extension (e.g., `.mp4`, not `.mp4.webm`).
+- **ElectronDownloadService** (Renderer-side IPC adapter):
+  1. Event-driven architecture: Subscribes to IPC events in constructor (onProgress, onStateChange).
+  2. Local cache (`itemsCache`) updated on IPC events.
+  3. `onItemUpdate()` callback mechanism to notify subscribers (e.g., queueStore).
+  4. `transition()` method maps user actions to IPC commands (start/pause/resume/cancel/retry).
+  5. `tick()` is no-op in Electron mode (returns cached item, no polling).
+- **queueStore Integration**:
+  1. Subscribes to `ElectronDownloadService.onItemUpdate()` in constructor.
+  2. Real-time updates: IPC events → ElectronDownloadService → queueStore.items → UI re-render.
+  3. `fillAvailableSlots()` transitions queued → analyzing, which triggers `start()` via IPC.
+  4. Works seamlessly with both Mock (web) and Electron modes.
+- **QueueHistoryBridge** verified: Automatically moves completed/failed/canceled items to History.
+- **Manual E2E Testing**:
+  1. Real YouTube video downloaded successfully (Me at the zoo - 191 KB).
+  2. Progress displayed real-time in UI (speed, ETA, downloaded size).
+  3. Status transitions observed: queued → analyzing → downloading → completed.
+  4. File exists on disk with correct extension (`.webm`).
+  5. Failed downloads show proper error messages ("Video not found or access denied").
+  6. History page populated automatically with completed/failed items.
+  7. Concurrent downloads respect configured limit.
+- **Tests**: 28 NativeDownloadService tests + 28 IPC downloadIpc tests covering lifecycle, progress parsing, error scenarios, concurrent limits.
+
+Test Results (Phase 2 Final):
+- `npm run test`: **30 test files, 246 tests, 0 failed** ✅
+- `npm run build`: ✅ zero errors (tsc -b + vite build)
+- `npm run electron:build`: ✅ zero errors (main.cjs + preload.cjs)
+- **Manual verification**: Real downloads working end-to-end ✅
 
 In Progress:
 - None.
 
-Pending (Phase 2 Remaining):
-- Native download implementation in NativeDownloadService using yt-dlp subprocess.
-- FFmpeg integration for merging/conversion workflows.
+Pending (Phase 3):
 - Persistent storage (electron-store or fs-based JSON) for settings, history, favorites, scheduler.
-- System tray, Windows startup, OS notifications (per SPEC Phase 2).
-- Push IPC events from Main → Renderer for download progress updates.
+- System tray, Windows startup, OS notifications (per SPEC Phase 2 → Phase 3).
 - Installer / packaging (electron-builder or equivalent).
+- Additional download features: playlist batch download, auto-retry on network errors, download scheduling.
 
 Blocked:
 - None.
 
-Known Bugs:
-- None known in application behavior.
-- `npm install` reported 7 dependency audit vulnerabilities. No automatic audit fix was applied to avoid altering dependency versions.
+Known Issues:
+- Some videos (age-restricted, geo-blocked, or heavily protected like popular music videos) may fail with "Video not found or access denied" - this is a yt-dlp/YouTube limitation, not an application bug.
+- Pause/Resume functionality exists but not manually tested in current session (architecture supports it via --continue flag).
 - `SettingsService` interface is sync (get/update/reset) but IPC is async — the `ElectronSettingsService` adapter documents this mismatch. `resolveSettingsService()` always returns `LocalStorageSettingsService` until this is resolved. See AI_HANDOFF.md "Known Architectural Decision Pending".
 
-Next Recommended Task:
-- Integrate FFmpeg detection and validation in `NativeDownloadService` for conversion workflows.
-- Add persistent storage (electron-store) for history/favorites/scheduler/settings in Main Process.
-- Implement push IPC events for download progress (Main → Renderer).
+Next Recommended Task (Phase 3):
+- Implement persistent storage for History/Favorites/Scheduler using electron-store or fs-based JSON.
+- Add system tray integration with minimize-to-tray behavior.
+- Implement OS notifications for download completion/failure.
+- Package application with electron-builder for distribution.

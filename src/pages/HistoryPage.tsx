@@ -1,9 +1,10 @@
-import { FolderOpen, RotateCcw, Trash2 } from "lucide-react";
+import { FolderOpen, RotateCcw, Star, Trash2 } from "lucide-react";
 import { useEffect } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useHistoryStore } from "../stores/historyStore";
+import { useFavoritesStore } from "../stores/favoritesStore";
 import type { HistoryItem, HistoryStatus } from "../types/download";
 import { formatBytes } from "../utils/format";
 
@@ -66,6 +67,7 @@ function HistoryRow({ item }: { item: HistoryItem }) {
   const remove = useHistoryStore((state) => state.remove);
   const redownload = useHistoryStore((state) => state.redownload);
   const openFolder = useHistoryStore((state) => state.openFolder);
+  const addToFavorites = useFavoritesStore((state) => state.add);
 
   function handleRedownload() {
     if (redownload(item.id)) {
@@ -76,6 +78,23 @@ function HistoryRow({ item }: { item: HistoryItem }) {
   function handleOpenFolder() {
     if (openFolder(item.id)) {
       toast.info(t("history.toast.openFolderMock"));
+    }
+  }
+
+  async function handleAddToFavorites() {
+    try {
+      const newId = `fav-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      await addToFavorites({
+        id: newId,
+        sourceUrl: item.sourceUrl,
+        title: item.title,
+        thumbnail: item.thumbnail,
+        channel: '', // History doesn't have channel info
+        dateAdded: new Date().toISOString(),
+      });
+      toast.success(t("history.toast.addedToFavorites"));
+    } catch (error) {
+      toast.error(t("history.toast.addToFavoritesFailed"));
     }
   }
 
@@ -106,6 +125,7 @@ function HistoryRow({ item }: { item: HistoryItem }) {
           ) : null}
         </div>
         <div className="flex flex-wrap justify-start gap-2 lg:justify-end">
+          <IconButton label={t("history.addToFavorites")} onClick={handleAddToFavorites} icon={<Star size={16} />} />
           <IconButton label={t("history.redownload")} onClick={handleRedownload} icon={<RotateCcw size={16} />} />
           <IconButton label={t("history.openFolder")} onClick={handleOpenFolder} icon={<FolderOpen size={16} />} />
           <IconButton label={t("history.remove")} onClick={() => void remove(item.id)} icon={<Trash2 size={16} />} />

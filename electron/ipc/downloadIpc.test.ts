@@ -439,6 +439,15 @@ describe("Download IPC Integration", () => {
       settings.concurrentDownloads = 1;
       service = new NativeDownloadService(settings, mockExecutor);
 
+      // Setup spawn behavior for successful download
+      mockExecutor.setAccessBehavior("yt-dlp", true);
+      mockExecutor.setSpawnBehavior("yt-dlp", {
+        stdout: "download:50000|100000|25000|00:02\n",
+        stderr: "",
+        exitCode: 0,
+        delay: 100
+      });
+
       const item1 = createMockDownloadItem({ status: "analyzing" });
       const item2 = createMockDownloadItem({ status: "analyzing" });
 
@@ -452,7 +461,7 @@ describe("Download IPC Integration", () => {
       // Wait for download to actually start
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      // Second start should fail
+      // Second start should fail due to concurrent limit
       const result2 = await simulateHandler(IPC_CHANNELS.DOWNLOAD_START, { id: item2.id }, service);
 
       expect(result2.success).toBe(false);
@@ -504,7 +513,7 @@ describe("Download IPC Integration", () => {
       service.on("download:progress", (payload) => progressEvents.push(payload));
 
       mockExecutor.setSpawnBehavior("yt-dlp", {
-        stdout: "download:50000000|100000000|5000000|00:10\n",
+        stdout: "download:50.0%|47.7MiB|95.4MiB|4.77MiB/s|00:10\n",
         stderr: "",
         exitCode: 0,
         delay: 50
@@ -527,7 +536,7 @@ describe("Download IPC Integration", () => {
       service.on("download:state-change", (payload) => stateChangeEvents.push(payload));
 
       mockExecutor.setSpawnBehavior("yt-dlp", {
-        stdout: "download:50000|100000|25000|00:02\n",
+        stdout: "download:50.0%|47.7KiB|95.4KiB|25.0KiB/s|00:02\n",
         stderr: "",
         exitCode: 0,
         delay: 50

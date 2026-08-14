@@ -145,8 +145,12 @@ describe("serviceResolver", () => {
       expect(resolveSchedulerService()).toBeInstanceOf(ElectronSchedulerService);
     });
 
-    it("resolveSettingsService always returns LocalStorageSettingsService (sync/async trade-off)", () => {
-      expect(resolveSettingsService()).toBeInstanceOf(LocalStorageSettingsService);
+    it("resolveSettingsService returns ElectronSettingsService in Electron mode", () => {
+      // Phase 3.1: Settings now uses ElectronSettingsService in Electron mode
+      const service = resolveSettingsService();
+      expect(service).toHaveProperty('getAsync');
+      expect(service).toHaveProperty('updateAsync');
+      expect(service).toHaveProperty('resetAsync');
     });
   });
 

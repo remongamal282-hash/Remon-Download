@@ -22,11 +22,11 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // electron/main.ts
-var import_electron2 = require("electron");
+var import_electron3 = require("electron");
 var path2 = __toESM(require("path"), 1);
 
 // electron/ipc/handlers.ts
-var import_electron = require("electron");
+var import_electron2 = require("electron");
 
 // electron/ipc/channels.ts
 var IPC_CHANNELS = {
@@ -409,6 +409,10 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     } else {
       args.push("-f", "best");
     }
+    if (item.format && item.format !== "auto") {
+      args.push("--merge-output-format", item.format);
+      args.push("--remux-video", item.format);
+    }
     if (this.settings.speedLimit !== "unlimited") {
       const limitKB = Math.floor(this.settings.speedLimit / 1024);
       args.push("-r", `${limitKB}K`);
@@ -417,14 +421,14 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       args.push("--ffmpeg-location", this.settings.ffmpegPath);
     }
     args.push("--newline");
-    args.push("--progress-template", "download:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.speed)s|%(progress.eta)s");
+    args.push("--progress-template", "download:%(progress._percent_str)s|%(progress._downloaded_bytes_str)s|%(progress._total_bytes_str)s|%(progress._speed_str)s|%(progress._eta_str)s");
     args.push("--no-warnings");
     args.push(item.sourceUrl);
     return args;
   }
   /**
    * Parse yt-dlp progress line
-   * Format: "download:123456|987654|500000|00:05"
+   * Format: "download:15.2%|1.5MiB|10MiB|500KiB/s|00:15"
    */
   parseProgressLine(line) {
     if (!line.startsWith("download:")) {
@@ -432,21 +436,48 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     }
     const data = line.substring(9);
     const parts = data.split("|");
-    if (parts.length < 4) {
+    if (parts.length < 5) {
       return null;
     }
-    const downloadedSize = parseInt(parts[0], 10) || 0;
-    const totalSize = parseInt(parts[1], 10) || 0;
-    const speed = parseFloat(parts[2]) || 0;
-    const eta = parts[3] || "--";
-    const progress = totalSize > 0 ? Math.min(100, downloadedSize / totalSize * 100) : 0;
+    const percentStr = parts[0].trim().replace("%", "");
+    const progress = parseFloat(percentStr) || 0;
+    const downloadedSize = this.parseSize(parts[1].trim());
+    const totalSize = this.parseSize(parts[2].trim());
+    const speed = this.parseSize(parts[3].trim().replace("/s", ""));
+    const eta = parts[4].trim() === "Unknown ETA" ? "--" : parts[4].trim();
     return {
-      progress,
+      progress: Math.min(100, progress),
       downloadedSize,
       totalSize,
       speed,
-      eta: eta === "Unknown ETA" ? "--" : eta
+      eta
     };
+  }
+  /**
+   * Parse size string (e.g., "1.5MiB", "500KiB") to bytes
+   */
+  parseSize(sizeStr) {
+    if (!sizeStr || sizeStr === "N/A" || sizeStr === "Unknown") {
+      return 0;
+    }
+    const match = sizeStr.match(/^([\d.]+)\s*([KMGT]i?B)?$/i);
+    if (!match) {
+      return 0;
+    }
+    const value = parseFloat(match[1]);
+    const unit = (match[2] || "B").toUpperCase();
+    const multipliers = {
+      "B": 1,
+      "KB": 1e3,
+      "KIB": 1024,
+      "MB": 1e3 * 1e3,
+      "MIB": 1024 * 1024,
+      "GB": 1e3 * 1e3 * 1e3,
+      "GIB": 1024 * 1024 * 1024,
+      "TB": 1e3 * 1e3 * 1e3 * 1e3,
+      "TIB": 1024 * 1024 * 1024 * 1024
+    };
+    return Math.floor(value * (multipliers[unit] || 1));
   }
   /**
    * Emits progress event to Main Process (which forwards to Renderer)
@@ -835,18 +866,95 @@ var DEFAULT_SETTINGS = {
   proxy: ""
 };
 
+// electron/utils/fileStorage.ts
+var import_fs2 = require("fs");
+var import_path = require("path");
+var import_electron = require("electron");
+var realFs = {
+  mkdir: (path3, options) => import_fs2.promises.mkdir(path3, options).then(() => void 0),
+  readFile: (path3, encoding) => import_fs2.promises.readFile(path3, encoding),
+  writeFile: (path3, data, encoding) => import_fs2.promises.writeFile(path3, data, encoding)
+};
+var realApp = {
+  getUserDataPath: () => import_electron.app.getPath("userData")
+};
+var fsOps = realFs;
+var appPath = realApp;
+function getStoragePath(filename) {
+  const userDataPath = appPath.getUserDataPath();
+  return (0, import_path.join)(userDataPath, "remon-download", filename);
+}
+async function ensureStorageDirectory() {
+  const userDataPath = appPath.getUserDataPath();
+  const storageDir = (0, import_path.join)(userDataPath, "remon-download");
+  await fsOps.mkdir(storageDir, { recursive: true });
+}
+async function readJsonFile(filename, fallback) {
+  try {
+    const filePath = getStoragePath(filename);
+    const fileContent = await fsOps.readFile(filePath, "utf-8");
+    if (!fileContent || fileContent.trim() === "") {
+      return fallback;
+    }
+    const parsed = JSON.parse(fileContent);
+    return parsed;
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return fallback;
+    }
+    if (error instanceof SyntaxError) {
+      console.warn(`[fileStorage] Invalid JSON in ${filename}, using fallback:`, error.message);
+      return fallback;
+    }
+    throw error;
+  }
+}
+async function writeJsonFile(filename, data) {
+  await ensureStorageDirectory();
+  const filePath = getStoragePath(filename);
+  const jsonString = JSON.stringify(data, null, 2);
+  await fsOps.writeFile(filePath, jsonString, "utf-8");
+}
+
 // electron/services/nativeSettingsService.ts
 var NativeSettingsService = class {
   settings = { ...DEFAULT_SETTINGS };
+  SETTINGS_FILE = "settings.json";
+  FILE_VERSION = "1.0.0";
+  /**
+   * Initialize service by loading settings from disk
+   * Must be called after construction
+   */
+  async initialize() {
+    const fileData = await readJsonFile(
+      this.SETTINGS_FILE,
+      {
+        version: this.FILE_VERSION,
+        data: DEFAULT_SETTINGS
+      }
+    );
+    this.settings = fileData.data;
+  }
+  /**
+   * Persist current settings to disk
+   */
+  async persist() {
+    await writeJsonFile(this.SETTINGS_FILE, {
+      version: this.FILE_VERSION,
+      data: this.settings
+    });
+  }
   async get() {
     return { ...this.settings };
   }
   async update(patch) {
     this.settings = { ...this.settings, ...patch };
+    await this.persist();
     return { ...this.settings };
   }
   async reset() {
     this.settings = { ...DEFAULT_SETTINGS };
+    await this.persist();
     return { ...this.settings };
   }
 };
@@ -854,34 +962,89 @@ var NativeSettingsService = class {
 // electron/services/nativeHistoryService.ts
 var NativeHistoryService = class {
   items = [];
+  HISTORY_FILE = "history.json";
+  FILE_VERSION = "1.0.0";
+  /**
+   * Initialize service by loading history from disk
+   * Must be called after construction
+   */
+  async initialize() {
+    const fileData = await readJsonFile(this.HISTORY_FILE, {
+      version: this.FILE_VERSION,
+      data: []
+    });
+    this.items = fileData.data.map((item) => ({
+      ...item,
+      downloadedAt: new Date(item.downloadedAt)
+    }));
+  }
+  /**
+   * Persist current history to disk
+   */
+  async persist() {
+    await writeJsonFile(this.HISTORY_FILE, {
+      version: this.FILE_VERSION,
+      data: this.items
+    });
+  }
   async getAll() {
     return [...this.items];
   }
   async add(item) {
     this.items = [item, ...this.items.filter((i) => i.id !== item.id)];
+    await this.persist();
     return item;
   }
   async remove(id) {
     this.items = this.items.filter((i) => i.id !== id);
+    await this.persist();
     return id;
   }
   async clear() {
     this.items = [];
+    await this.persist();
   }
 };
 
 // electron/services/nativeFavoritesService.ts
 var NativeFavoritesService = class {
   items = [];
+  FAVORITES_FILE = "favorites.json";
+  FILE_VERSION = "1.0.0";
+  /**
+   * Initialize service by loading favorites from disk
+   * Must be called after construction
+   */
+  async initialize() {
+    const fileData = await readJsonFile(
+      this.FAVORITES_FILE,
+      {
+        version: this.FILE_VERSION,
+        data: []
+      }
+    );
+    this.items = fileData.data;
+  }
+  /**
+   * Persist current favorites to disk
+   */
+  async persist() {
+    await writeJsonFile(this.FAVORITES_FILE, {
+      version: this.FILE_VERSION,
+      data: this.items
+    });
+  }
   async getAll() {
     return [...this.items];
   }
   async add(item) {
     this.items = [item, ...this.items.filter((i) => i.id !== item.id)];
+    await this.persist();
     return item;
   }
   async remove(id) {
     this.items = this.items.filter((i) => i.id !== id);
+    await this.persist();
     return id;
   }
 };
@@ -889,6 +1052,31 @@ var NativeFavoritesService = class {
 // electron/services/nativeSchedulerService.ts
 var NativeSchedulerService = class {
   items = [];
+  SCHEDULER_FILE = "scheduler.json";
+  FILE_VERSION = "1.0.0";
+  /**
+   * Initialize service by loading scheduler from disk
+   * Must be called after construction
+   */
+  async initialize() {
+    const fileData = await readJsonFile(
+      this.SCHEDULER_FILE,
+      {
+        version: this.FILE_VERSION,
+        data: []
+      }
+    );
+    this.items = fileData.data;
+  }
+  /**
+   * Persist current scheduler to disk
+   */
+  async persist() {
+    await writeJsonFile(this.SCHEDULER_FILE, {
+      version: this.FILE_VERSION,
+      data: this.items
+    });
+  }
   async getAll() {
     return [...this.items];
   }
@@ -902,6 +1090,7 @@ var NativeSchedulerService = class {
       triggerCount: 0
     };
     this.items = [item, ...this.items];
+    await this.persist();
     return item;
   }
   async update(schedule) {
@@ -910,6 +1099,7 @@ var NativeSchedulerService = class {
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
     this.items = this.items.map((i) => i.id === schedule.id ? updated : i);
+    await this.persist();
     return updated;
   }
   async cancel(id) {
@@ -920,10 +1110,12 @@ var NativeSchedulerService = class {
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
     this.items = this.items.map((i) => i.id === id ? canceled : i);
+    await this.persist();
     return canceled;
   }
   async remove(id) {
     this.items = this.items.filter((i) => i.id !== id);
+    await this.persist();
     return id;
   }
   requireItem(id) {
@@ -951,6 +1143,33 @@ function registerIpcHandlers() {
   const historyService = new NativeHistoryService();
   const favoritesService = new NativeFavoritesService();
   const schedulerService = new NativeSchedulerService();
+  const initServices = async () => {
+    try {
+      await settingsService.initialize();
+      console.log("[IPC] NativeSettingsService initialized");
+    } catch (err) {
+      console.error("[IPC] Failed to initialize NativeSettingsService:", err);
+    }
+    try {
+      await historyService.initialize();
+      console.log("[IPC] NativeHistoryService initialized");
+    } catch (err) {
+      console.error("[IPC] Failed to initialize NativeHistoryService:", err);
+    }
+    try {
+      await favoritesService.initialize();
+      console.log("[IPC] NativeFavoritesService initialized");
+    } catch (err) {
+      console.error("[IPC] Failed to initialize NativeFavoritesService:", err);
+    }
+    try {
+      await schedulerService.initialize();
+      console.log("[IPC] NativeSchedulerService initialized");
+    } catch (err) {
+      console.error("[IPC] Failed to initialize NativeSchedulerService:", err);
+    }
+  };
+  void initServices();
   let downloadService = null;
   let downloadServiceReady = false;
   const initDownloadService = async () => {
@@ -959,13 +1178,13 @@ function registerIpcHandlers() {
       downloadService = new NativeDownloadService(settings);
       downloadServiceReady = true;
       downloadService.on("download:progress", (payload) => {
-        const windows = import_electron.BrowserWindow.getAllWindows();
+        const windows = import_electron2.BrowserWindow.getAllWindows();
         windows.forEach((win) => {
           win.webContents.send(IPC_EVENTS.DOWNLOAD_PROGRESS, payload);
         });
       });
       downloadService.on("download:state-change", (payload) => {
-        const windows = import_electron.BrowserWindow.getAllWindows();
+        const windows = import_electron2.BrowserWindow.getAllWindows();
         windows.forEach((win) => {
           win.webContents.send(IPC_EVENTS.DOWNLOAD_STATE_CHANGE, payload);
         });
@@ -984,7 +1203,7 @@ function registerIpcHandlers() {
     }
     return downloadService;
   };
-  import_electron.ipcMain.handle(IPC_CHANNELS.METADATA_ANALYZE, async (_, { url }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.METADATA_ANALYZE, async (_, { url }) => {
     try {
       const settings = await settingsService.get();
       const metadataService = new NativeMetadataService(settings.ytdlpPath);
@@ -994,7 +1213,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_GET_ALL, async () => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_GET_ALL, async () => {
     try {
       const service = await ensureDownloadService();
       const data = await service.getAll();
@@ -1003,7 +1222,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_ADD, async (_, { item }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_ADD, async (_, { item }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.add(item);
@@ -1012,7 +1231,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_START, async (_, { id }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_START, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.start(id);
@@ -1021,7 +1240,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_PAUSE, async (_, { id }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_PAUSE, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.pause(id);
@@ -1030,7 +1249,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_RESUME, async (_, { id }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_RESUME, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.resume(id);
@@ -1039,7 +1258,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_CANCEL, async (_, { id }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_CANCEL, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.cancel(id);
@@ -1048,7 +1267,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_RETRY, async (_, { id }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_RETRY, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.retry(id);
@@ -1057,7 +1276,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_REMOVE, async (_, { id }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_REMOVE, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.remove(id);
@@ -1066,7 +1285,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_REORDER, async (_, { orderedIds }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_REORDER, async (_, { orderedIds }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.reorder(orderedIds);
@@ -1075,7 +1294,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.SETTINGS_GET, async () => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.SETTINGS_GET, async () => {
     try {
       const data = await settingsService.get();
       return wrapSuccess(data);
@@ -1083,7 +1302,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.SETTINGS_UPDATE, async (_, { settings }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.SETTINGS_UPDATE, async (_, { settings }) => {
     try {
       const data = await settingsService.update(settings);
       if (downloadService) {
@@ -1094,7 +1313,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.SETTINGS_RESET, async () => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.SETTINGS_RESET, async () => {
     try {
       const data = await settingsService.reset();
       if (downloadService) {
@@ -1105,7 +1324,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.HISTORY_GET_ALL, async () => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.HISTORY_GET_ALL, async () => {
     try {
       const data = await historyService.getAll();
       return wrapSuccess(data);
@@ -1113,7 +1332,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.HISTORY_ADD, async (_, { item }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.HISTORY_ADD, async (_, { item }) => {
     try {
       const data = await historyService.add(item);
       return wrapSuccess(data);
@@ -1121,7 +1340,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.HISTORY_REMOVE, async (_, { id }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.HISTORY_REMOVE, async (_, { id }) => {
     try {
       const data = await historyService.remove(id);
       return wrapSuccess(data);
@@ -1129,7 +1348,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.HISTORY_CLEAR, async () => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.HISTORY_CLEAR, async () => {
     try {
       await historyService.clear();
       return wrapSuccess(void 0);
@@ -1137,7 +1356,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.FAVORITES_GET_ALL, async () => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.FAVORITES_GET_ALL, async () => {
     try {
       const data = await favoritesService.getAll();
       return wrapSuccess(data);
@@ -1145,7 +1364,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.FAVORITES_ADD, async (_, { item }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.FAVORITES_ADD, async (_, { item }) => {
     try {
       const data = await favoritesService.add(item);
       return wrapSuccess(data);
@@ -1153,7 +1372,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.FAVORITES_REMOVE, async (_, { id }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.FAVORITES_REMOVE, async (_, { id }) => {
     try {
       const data = await favoritesService.remove(id);
       return wrapSuccess(data);
@@ -1161,7 +1380,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.SCHEDULER_GET_ALL, async () => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.SCHEDULER_GET_ALL, async () => {
     try {
       const data = await schedulerService.getAll();
       return wrapSuccess(data);
@@ -1169,7 +1388,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.SCHEDULER_CREATE, async (_, { schedule }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.SCHEDULER_CREATE, async (_, { schedule }) => {
     try {
       const data = await schedulerService.create(schedule);
       return wrapSuccess(data);
@@ -1177,7 +1396,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.SCHEDULER_UPDATE, async (_, { schedule }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.SCHEDULER_UPDATE, async (_, { schedule }) => {
     try {
       const data = await schedulerService.update(schedule);
       return wrapSuccess(data);
@@ -1185,7 +1404,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.SCHEDULER_CANCEL, async (_, { id }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.SCHEDULER_CANCEL, async (_, { id }) => {
     try {
       const data = await schedulerService.cancel(id);
       return wrapSuccess(data);
@@ -1193,7 +1412,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron.ipcMain.handle(IPC_CHANNELS.SCHEDULER_REMOVE, async (_, { id }) => {
+  import_electron2.ipcMain.handle(IPC_CHANNELS.SCHEDULER_REMOVE, async (_, { id }) => {
     try {
       const data = await schedulerService.remove(id);
       return wrapSuccess(data);
@@ -1206,14 +1425,14 @@ function registerIpcHandlers() {
 // electron/main.ts
 var mainWindow = null;
 function createWindow() {
-  mainWindow = new import_electron2.BrowserWindow({
+  mainWindow = new import_electron3.BrowserWindow({
     width: 1280,
     height: 720,
     minWidth: 1024,
     minHeight: 600,
     title: "Remon Download",
     webPreferences: {
-      preload: path2.join(__dirname, "preload.js"),
+      preload: path2.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -1231,17 +1450,17 @@ function createWindow() {
     mainWindow = null;
   });
 }
-import_electron2.app.whenReady().then(() => {
+import_electron3.app.whenReady().then(() => {
   createWindow();
-  import_electron2.app.on("activate", () => {
-    if (import_electron2.BrowserWindow.getAllWindows().length === 0) {
+  import_electron3.app.on("activate", () => {
+    if (import_electron3.BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
   });
 });
-import_electron2.app.on("window-all-closed", () => {
+import_electron3.app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
-    import_electron2.app.quit();
+    import_electron3.app.quit();
   }
 });
-//# sourceMappingURL=main.js.map
+//# sourceMappingURL=main.cjs.map

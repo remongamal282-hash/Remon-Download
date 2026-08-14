@@ -47,18 +47,20 @@ export class ElectronMetadataService implements MetadataService {
  * - tick() is a no-op in Electron mode (progress is event-driven, not polled)
  * - Methods like createFromMetadata, transition, retry, fail are used by queueStore
  *   but the actual download lifecycle is managed by NativeDownloadService in Main Process
+ * - Provides callbacks to notify external subscribers (like queueStore) of updates
  */
 export class ElectronDownloadService implements DownloadService {
   private itemsCache: Map<string, DownloadItem> = new Map();
   private progressUnsubscribe: (() => void) | null = null;
   private stateChangeUnsubscribe: (() => void) | null = null;
+  private updateCallbacks: Set<(id: string, item: DownloadItem) => void> = new Set();
 
   constructor() {
     // Subscribe to IPC progress events
     this.progressUnsubscribe = window.electronAPI!.download.onProgress((payload: DownloadProgressPayload) => {
       const item = this.itemsCache.get(payload.id);
       if (item) {
-        this.itemsCache.set(payload.id, {
+        const updated = {
           ...item,
           progress: payload.progress,
           downloadedSize: payload.downloadedSize,
@@ -66,7 +68,11 @@ export class ElectronDownloadService implements DownloadService {
           speed: payload.speed,
           eta: payload.eta,
           lastUpdatedAt: Date.now()
-        });
+        };
+        this.itemsCache.set(payload.id, updated);
+
+        // Notify subscribers of the update
+        this.notifyUpdate(payload.id, updated);
       }
     });
 
@@ -74,18 +80,37 @@ export class ElectronDownloadService implements DownloadService {
     this.stateChangeUnsubscribe = window.electronAPI!.download.onStateChange((payload: DownloadStateChangePayload) => {
       const item = this.itemsCache.get(payload.id);
       if (item) {
-        this.itemsCache.set(payload.id, {
+        const updated = {
           ...item,
           status: payload.status,
           errorCode: payload.errorCode,
           errorMessage: payload.errorMessage,
           lastUpdatedAt: Date.now()
-        });
+        };
+        this.itemsCache.set(payload.id, updated);
+
+        // Notify subscribers of the update
+        this.notifyUpdate(payload.id, updated);
       }
     });
 
     // Initial sync from Main Process
     void this.syncFromMain();
+  }
+
+  /**
+   * Subscribe to item updates (for queueStore integration)
+   */
+  onItemUpdate(callback: (id: string, item: DownloadItem) => void): () => void {
+    this.updateCallbacks.add(callback);
+    return () => this.updateCallbacks.delete(callback);
+  }
+
+  /**
+   * Notify all subscribers of an item update
+   */
+  private notifyUpdate(id: string, item: DownloadItem): void {
+    this.updateCallbacks.forEach((callback) => callback(id, item));
   }
 
   /**
@@ -209,8 +234,14 @@ export class ElectronDownloadService implements DownloadService {
    * In Electron mode, this sends command to Main Process and waits for state change event
    */
   transition(item: DownloadItem, status: DownloadStatus, now: number): DownloadItem {
-    // For analyzing → downloading transition, call start()
-    if (item.status === "analyzing" && status === "downloading") {
+    // For queued → analyzing transition, call start() immediately (Electron mode optimization)
+    // In Mock mode, tick() progresses analyzing → downloading after 650ms
+    // In Electron mode, we skip analyzing and go directly to downloading by calling start()
+    if (item.status === "queued" && status === "analyzing") {
+      void window.electronAPI!.download.start(item.id);
+    }
+    // For analyzing → downloading transition, call start() (fallback/explicit case)
+    else if (item.status === "analyzing" && status === "downloading") {
       void window.electronAPI!.download.start(item.id);
     }
     // For downloading → paused, call pause()

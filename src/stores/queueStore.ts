@@ -75,119 +75,131 @@ function fillAvailableSlots(items: DownloadItem[], concurrentDownloads: number, 
   });
 }
 
-export const useQueueStore = create<QueueState>((set, get) => ({
-  items: [],
-  lastError: null,
-  addFromMetadata: (metadata, quality, format) => {
-    const order = get().items.length + 1;
-    const item = resolveDownloadService().createFromMetadata(metadata, order, quality, format);
-    set((state) => ({ items: [...state.items, item] }));
-    return item;
-  },
-  addManyFromMetadata: (metadata, quality, format) => {
-    const startOrder = get().items.length + 1;
-    const items = metadata.map((video, index) =>
-      resolveDownloadService().createFromMetadata(video, startOrder + index, quality, format)
-    );
-    set((state) => ({ items: [...state.items, ...items] }));
-    return items;
-  },
-  addFromHistoryItem: (historyItem) => {
-    const order = get().items.length + 1;
-    const item = resolveDownloadService().createFromHistoryItem(historyItem, order);
-    set((state) => ({ items: [...state.items, item] }));
-    return item;
-  },
-  addFromFavoriteItem: (favoriteItem, quality, format) => {
-    const order = get().items.length + 1;
-    const item = resolveDownloadService().createFromFavoriteItem(favoriteItem, order, quality, format);
-    set((state) => ({ items: [...state.items, item] }));
-    return item;
-  },
-  pause: (id) => {
-    set((state) => {
-      const result = safeUpdateItem(state.items, id, (item) =>
-        resolveDownloadService().transition(item, "paused", Date.now())
+export const useQueueStore = create<QueueState>((set, get) => {
+  // Subscribe to download service updates in Electron mode
+  const downloadService = resolveDownloadService();
+  if (downloadService.onItemUpdate) {
+    downloadService.onItemUpdate((id, updatedItem) => {
+      set((state) => ({
+        items: state.items.map((item) => (item.id === id ? updatedItem : item))
+      }));
+    });
+  }
+
+  return {
+    items: [],
+    lastError: null,
+    addFromMetadata: (metadata, quality, format) => {
+      const order = get().items.length + 1;
+      const item = resolveDownloadService().createFromMetadata(metadata, order, quality, format);
+      set((state) => ({ items: [...state.items, item] }));
+      return item;
+    },
+    addManyFromMetadata: (metadata, quality, format) => {
+      const startOrder = get().items.length + 1;
+      const items = metadata.map((video, index) =>
+        resolveDownloadService().createFromMetadata(video, startOrder + index, quality, format)
       );
-      return { items: result.items, lastError: result.error };
-    });
-  },
-  resume: (id) => {
-    set((state) => {
-      const result = safeUpdateItem(state.items, id, (item) =>
-        resolveDownloadService().transition(item, "downloading", Date.now())
-      );
-      return { items: result.items, lastError: result.error };
-    });
-  },
-  cancel: (id) => {
-    set((state) => {
-      const result = safeUpdateItem(state.items, id, (item) =>
-        resolveDownloadService().transition(item, "canceled", Date.now())
-      );
-      return { items: result.items, lastError: result.error };
-    });
-  },
-  retry: (id) => {
-    set((state) => {
-      const result = safeUpdateItem(state.items, id, (item) => resolveDownloadService().retry(item, Date.now()));
-      return { items: result.items, lastError: result.error };
-    });
-  },
-  simulateError: (id, code) => {
-    set((state) => {
-      const error = mapMockError(code);
-      const result = safeUpdateItem(state.items, id, (item) => resolveDownloadService().fail(item, error, Date.now()));
-      return { items: result.items, lastError: result.error ?? error };
-    });
-  },
-  reorder: (activeId, overId) => {
-    set((state) => {
-      const activeIndex = state.items.findIndex((item) => item.id === activeId);
-      const overIndex = state.items.findIndex((item) => item.id === overId);
+      set((state) => ({ items: [...state.items, ...items] }));
+      return items;
+    },
+    addFromHistoryItem: (historyItem) => {
+      const order = get().items.length + 1;
+      const item = resolveDownloadService().createFromHistoryItem(historyItem, order);
+      set((state) => ({ items: [...state.items, item] }));
+      return item;
+    },
+    addFromFavoriteItem: (favoriteItem, quality, format) => {
+      const order = get().items.length + 1;
+      const item = resolveDownloadService().createFromFavoriteItem(favoriteItem, order, quality, format);
+      set((state) => ({ items: [...state.items, item] }));
+      return item;
+    },
+    pause: (id) => {
+      set((state) => {
+        const result = safeUpdateItem(state.items, id, (item) =>
+          resolveDownloadService().transition(item, "paused", Date.now())
+        );
+        return { items: result.items, lastError: result.error };
+      });
+    },
+    resume: (id) => {
+      set((state) => {
+        const result = safeUpdateItem(state.items, id, (item) =>
+          resolveDownloadService().transition(item, "downloading", Date.now())
+        );
+        return { items: result.items, lastError: result.error };
+      });
+    },
+    cancel: (id) => {
+      set((state) => {
+        const result = safeUpdateItem(state.items, id, (item) =>
+          resolveDownloadService().transition(item, "canceled", Date.now())
+        );
+        return { items: result.items, lastError: result.error };
+      });
+    },
+    retry: (id) => {
+      set((state) => {
+        const result = safeUpdateItem(state.items, id, (item) => resolveDownloadService().retry(item, Date.now()));
+        return { items: result.items, lastError: result.error };
+      });
+    },
+    simulateError: (id, code) => {
+      set((state) => {
+        const error = mapMockError(code);
+        const result = safeUpdateItem(state.items, id, (item) => resolveDownloadService().fail(item, error, Date.now()));
+        return { items: result.items, lastError: result.error ?? error };
+      });
+    },
+    reorder: (activeId, overId) => {
+      set((state) => {
+        const activeIndex = state.items.findIndex((item) => item.id === activeId);
+        const overIndex = state.items.findIndex((item) => item.id === overId);
 
-      if (activeIndex === -1 || overIndex === -1 || activeIndex === overIndex) {
-        return state;
-      }
+        if (activeIndex === -1 || overIndex === -1 || activeIndex === overIndex) {
+          return state;
+        }
 
-      const nextItems = [...state.items];
-      const [movedItem] = nextItems.splice(activeIndex, 1);
-      nextItems.splice(overIndex, 0, movedItem);
+        const nextItems = [...state.items];
+        const [movedItem] = nextItems.splice(activeIndex, 1);
+        nextItems.splice(overIndex, 0, movedItem);
 
-      return { items: normalizeOrder(nextItems), lastError: null };
-    });
-  },
-  tick: (concurrentDownloads, speedLimit, now = Date.now()) => {
-    set((state) => {
-      const advancedItems = state.items.map((item) => resolveDownloadService().tick(item, now, speedLimit));
-      const refillableItems = advancedItems.some((item, index) => item.status !== state.items[index]?.status)
-        ? fillAvailableSlots(advancedItems, concurrentDownloads, now)
-        : advancedItems;
+        return { items: normalizeOrder(nextItems), lastError: null };
+      });
+    },
+    tick: (concurrentDownloads, speedLimit, now = Date.now()) => {
+      set((state) => {
+        const advancedItems = state.items.map((item) => resolveDownloadService().tick(item, now, speedLimit));
+        const refillableItems = advancedItems.some((item, index) => item.status !== state.items[index]?.status)
+          ? fillAvailableSlots(advancedItems, concurrentDownloads, now)
+          : advancedItems;
 
-      const hasActiveItems = refillableItems.some((item) => activeStatuses.includes(item.status));
-      const hasQueuedItems = refillableItems.some((item) => item.status === "queued");
-      const nextItems = hasActiveItems || !hasQueuedItems
-        ? refillableItems
-        : fillAvailableSlots(refillableItems, concurrentDownloads, now);
+        const hasActiveItems = refillableItems.some((item) => activeStatuses.includes(item.status));
+        const hasQueuedItems = refillableItems.some((item) => item.status === "queued");
+        const nextItems = hasActiveItems || !hasQueuedItems
+          ? refillableItems
+          : fillAvailableSlots(refillableItems, concurrentDownloads, now);
 
-      return { items: normalizeOrder(nextItems), lastError: state.lastError };
-    });
-  },
-  remove: (id) => {
-    set((state) => ({
-      items: state.items
-        .filter((item) => item.id !== id)
-        .map((item, index) => ({ ...item, order: index + 1 }))
-    }));
-  },
-  markHistoryRecorded: (id, recordedAt) => {
-    set((state) => ({
-      items: state.items.map((item) => (item.id === id ? { ...item, historyRecordedAt: recordedAt } : item))
-    }));
-  },
-  clear: () => set({ items: [], lastError: null }),
-  clearLastError: () => set({ lastError: null })
-}));
+        return { items: normalizeOrder(nextItems), lastError: state.lastError };
+      });
+    },
+    remove: (id) => {
+      set((state) => ({
+        items: state.items
+          .filter((item) => item.id !== id)
+          .map((item, index) => ({ ...item, order: index + 1 }))
+      }));
+    },
+    markHistoryRecorded: (id, recordedAt) => {
+      set((state) => ({
+        items: state.items.map((item) => (item.id === id ? { ...item, historyRecordedAt: recordedAt } : item))
+      }));
+    },
+    clear: () => set({ items: [], lastError: null }),
+    clearLastError: () => set({ lastError: null })
+  };
+});
 
 export function getQueueSummary(items: DownloadItem[]) {
   return {

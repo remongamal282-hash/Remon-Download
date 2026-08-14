@@ -163,6 +163,13 @@ export class NativeDownloadService extends EventEmitter {
       args.push("-f", "best");
     }
 
+    // Merge output format (prefer user's choice, fallback to best available)
+    if (item.format && item.format !== "auto") {
+      args.push("--merge-output-format", item.format);
+      // Remux to preferred format if needed (fast, no re-encoding)
+      args.push("--remux-video", item.format);
+    }
+
     // Speed limit
     if (this.settings.speedLimit !== "unlimited") {
       const limitKB = Math.floor(this.settings.speedLimit / 1024);
@@ -176,7 +183,8 @@ export class NativeDownloadService extends EventEmitter {
 
     // Progress template for machine-readable output
     args.push("--newline");
-    args.push("--progress-template", "download:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.speed)s|%(progress.eta)s");
+    // Use simpler template that works across yt-dlp versions
+    args.push("--progress-template", "download:%(progress._percent_str)s|%(progress._downloaded_bytes_str)s|%(progress._total_bytes_str)s|%(progress._speed_str)s|%(progress._eta_str)s");
 
     // No warnings to keep output clean
     args.push("--no-warnings");
@@ -189,7 +197,7 @@ export class NativeDownloadService extends EventEmitter {
 
   /**
    * Parse yt-dlp progress line
-   * Format: "download:123456|987654|500000|00:05"
+   * Format: "download:15.2%|1.5MiB|10MiB|500KiB/s|00:15"
    */
   private parseProgressLine(line: string): YtdlpProgress | null {
     if (!line.startsWith("download:")) {
@@ -199,24 +207,64 @@ export class NativeDownloadService extends EventEmitter {
     const data = line.substring(9); // Remove "download:" prefix
     const parts = data.split("|");
 
-    if (parts.length < 4) {
+    if (parts.length < 5) {
       return null;
     }
 
-    const downloadedSize = parseInt(parts[0], 10) || 0;
-    const totalSize = parseInt(parts[1], 10) || 0;
-    const speed = parseFloat(parts[2]) || 0;
-    const eta = parts[3] || "--";
+    // Parse percent (e.g., "15.2%" → 15.2)
+    const percentStr = parts[0].trim().replace("%", "");
+    const progress = parseFloat(percentStr) || 0;
 
-    const progress = totalSize > 0 ? Math.min(100, (downloadedSize / totalSize) * 100) : 0;
+    // Parse downloaded bytes (e.g., "1.5MiB" → bytes)
+    const downloadedSize = this.parseSize(parts[1].trim());
+
+    // Parse total bytes (e.g., "10MiB" → bytes)
+    const totalSize = this.parseSize(parts[2].trim());
+
+    // Parse speed (e.g., "500KiB/s" → bytes/sec)
+    const speed = this.parseSize(parts[3].trim().replace("/s", ""));
+
+    // Parse ETA (e.g., "00:15" or "Unknown ETA")
+    const eta = parts[4].trim() === "Unknown ETA" ? "--" : parts[4].trim();
 
     return {
-      progress,
+      progress: Math.min(100, progress),
       downloadedSize,
       totalSize,
       speed,
-      eta: eta === "Unknown ETA" ? "--" : eta
+      eta
     };
+  }
+
+  /**
+   * Parse size string (e.g., "1.5MiB", "500KiB") to bytes
+   */
+  private parseSize(sizeStr: string): number {
+    if (!sizeStr || sizeStr === "N/A" || sizeStr === "Unknown") {
+      return 0;
+    }
+
+    const match = sizeStr.match(/^([\d.]+)\s*([KMGT]i?B)?$/i);
+    if (!match) {
+      return 0;
+    }
+
+    const value = parseFloat(match[1]);
+    const unit = (match[2] || "B").toUpperCase();
+
+    const multipliers: Record<string, number> = {
+      "B": 1,
+      "KB": 1000,
+      "KIB": 1024,
+      "MB": 1000 * 1000,
+      "MIB": 1024 * 1024,
+      "GB": 1000 * 1000 * 1000,
+      "GIB": 1024 * 1024 * 1024,
+      "TB": 1000 * 1000 * 1000 * 1000,
+      "TIB": 1024 * 1024 * 1024 * 1024
+    };
+
+    return Math.floor(value * (multipliers[unit] || 1));
   }
 
   /**
@@ -462,9 +510,9 @@ export class NativeDownloadService extends EventEmitter {
       throw new Error(`Download item not found: ${id}`);
     }
 
-    // Check concurrent downloads limit
+    // Check concurrent downloads limit (count only actively downloading items, not analyzing)
     const activeCount = Array.from(this.items.values()).filter((i) =>
-      ["analyzing", "downloading", "merging", "converting"].includes(i.status)
+      ["downloading", "merging", "converting"].includes(i.status)
     ).length;
 
     if (activeCount >= this.settings.concurrentDownloads) {
