@@ -70,6 +70,48 @@ describe('NativeFavoritesService', () => {
       expect(items).toEqual([]);
     });
 
+    it('should ignore legacy array-shaped favorites file and fall back to empty state', async () => {
+      mockReadJsonFile.mockResolvedValue([
+        {
+          id: 'legacy-1',
+          sourceUrl: 'https://example.com/legacy',
+          title: 'Legacy Favorite',
+          thumbnail: 'https://example.com/legacy.jpg',
+          channel: 'Legacy Channel',
+          dateAdded: '2024-01-01T00:00:00.000Z',
+        },
+      ] as unknown as { version: string; data: FavoriteItem[] });
+
+      const newService = new NativeFavoritesService();
+      await expect(newService.initialize()).resolves.toBeUndefined();
+
+      const items = await newService.getAll();
+      expect(items).toEqual([]);
+    });
+
+    it('should normalize invalid dateAdded values from disk before rendering', async () => {
+      mockReadJsonFile.mockResolvedValue({
+        version: '1.0.0',
+        data: [
+          {
+            id: 'broken-date',
+            sourceUrl: 'https://example.com/broken',
+            title: 'Broken Favorite',
+            thumbnail: 'https://example.com/broken.jpg',
+            channel: 'Broken Channel',
+            dateAdded: 'not-a-valid-date',
+          },
+        ],
+      });
+
+      const newService = new NativeFavoritesService();
+      await newService.initialize();
+
+      const [favorite] = await newService.getAll();
+      expect(favorite.dateAdded).toBeTypeOf('string');
+      expect(Number.isNaN(new Date(favorite.dateAdded).getTime())).toBe(false);
+    });
+
     it('should handle file read errors gracefully', async () => {
       mockReadJsonFile.mockRejectedValue(new Error('Permission denied'));
 

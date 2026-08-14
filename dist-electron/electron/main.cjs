@@ -921,19 +921,36 @@ var NativeSettingsService = class {
   settings = { ...DEFAULT_SETTINGS };
   SETTINGS_FILE = "settings.json";
   FILE_VERSION = "1.0.0";
+  initializationPromise = null;
   /**
    * Initialize service by loading settings from disk
    * Must be called after construction
    */
   async initialize() {
-    const fileData = await readJsonFile(
-      this.SETTINGS_FILE,
-      {
-        version: this.FILE_VERSION,
-        data: DEFAULT_SETTINGS
-      }
-    );
-    this.settings = fileData.data;
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+    this.initializationPromise = (async () => {
+      const fileData = await readJsonFile(
+        this.SETTINGS_FILE,
+        {
+          version: this.FILE_VERSION,
+          data: DEFAULT_SETTINGS
+        }
+      );
+      this.settings = fileData.data;
+    })();
+    return this.initializationPromise;
+  }
+  /**
+   * Ensure service is initialized before proceeding
+   */
+  async ensureInitialized() {
+    if (!this.initializationPromise) {
+      await this.initialize();
+    } else {
+      await this.initializationPromise;
+    }
   }
   /**
    * Persist current settings to disk
@@ -945,14 +962,17 @@ var NativeSettingsService = class {
     });
   }
   async get() {
+    await this.ensureInitialized();
     return { ...this.settings };
   }
   async update(patch) {
+    await this.ensureInitialized();
     this.settings = { ...this.settings, ...patch };
     await this.persist();
     return { ...this.settings };
   }
   async reset() {
+    await this.ensureInitialized();
     this.settings = { ...DEFAULT_SETTINGS };
     await this.persist();
     return { ...this.settings };
@@ -964,19 +984,36 @@ var NativeHistoryService = class {
   items = [];
   HISTORY_FILE = "history.json";
   FILE_VERSION = "1.0.0";
+  initializationPromise = null;
   /**
    * Initialize service by loading history from disk
    * Must be called after construction
    */
   async initialize() {
-    const fileData = await readJsonFile(this.HISTORY_FILE, {
-      version: this.FILE_VERSION,
-      data: []
-    });
-    this.items = fileData.data.map((item) => ({
-      ...item,
-      downloadedAt: new Date(item.downloadedAt)
-    }));
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+    this.initializationPromise = (async () => {
+      const fileData = await readJsonFile(this.HISTORY_FILE, {
+        version: this.FILE_VERSION,
+        data: []
+      });
+      this.items = fileData.data.map((item) => ({
+        ...item,
+        downloadedAt: new Date(item.downloadedAt)
+      }));
+    })();
+    return this.initializationPromise;
+  }
+  /**
+   * Ensure service is initialized before proceeding
+   */
+  async ensureInitialized() {
+    if (!this.initializationPromise) {
+      await this.initialize();
+    } else {
+      await this.initializationPromise;
+    }
   }
   /**
    * Persist current history to disk
@@ -988,6 +1025,7 @@ var NativeHistoryService = class {
     });
   }
   async getAll() {
+    await this.ensureInitialized();
     return [...this.items];
   }
   async add(item) {
@@ -1007,23 +1045,63 @@ var NativeHistoryService = class {
 };
 
 // electron/services/nativeFavoritesService.ts
+function isFavoritesFileFormat(value) {
+  return !!value && typeof value === "object" && "data" in value && Array.isArray(value.data);
+}
+function normalizeFavoriteItem(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  const dateValue = typeof item.dateAdded === "string" ? item.dateAdded : (/* @__PURE__ */ new Date()).toISOString();
+  const parsedDate = new Date(dateValue);
+  const normalizedDate = Number.isNaN(parsedDate.getTime()) ? (/* @__PURE__ */ new Date()).toISOString() : parsedDate.toISOString();
+  return {
+    id: String(item.id ?? crypto.randomUUID()),
+    sourceUrl: String(item.sourceUrl ?? ""),
+    thumbnail: String(item.thumbnail ?? ""),
+    title: String(item.title ?? "Untitled Favorite"),
+    channel: String(item.channel ?? "Unknown channel"),
+    dateAdded: normalizedDate
+  };
+}
 var NativeFavoritesService = class {
   items = [];
   FAVORITES_FILE = "favorites.json";
   FILE_VERSION = "1.0.0";
+  initializationPromise = null;
   /**
    * Initialize service by loading favorites from disk
    * Must be called after construction
    */
   async initialize() {
-    const fileData = await readJsonFile(
-      this.FAVORITES_FILE,
-      {
-        version: this.FILE_VERSION,
-        data: []
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+    this.initializationPromise = (async () => {
+      const fileData = await readJsonFile(
+        this.FAVORITES_FILE,
+        {
+          version: this.FILE_VERSION,
+          data: []
+        }
+      );
+      if (isFavoritesFileFormat(fileData)) {
+        this.items = fileData.data.map((item) => normalizeFavoriteItem(item)).filter((item) => item !== null);
+        return;
       }
-    );
-    this.items = fileData.data;
+      this.items = [];
+    })();
+    return this.initializationPromise;
+  }
+  /**
+   * Ensure service is initialized before proceeding
+   */
+  async ensureInitialized() {
+    if (!this.initializationPromise) {
+      await this.initialize();
+    } else {
+      await this.initializationPromise;
+    }
   }
   /**
    * Persist current favorites to disk
@@ -1035,6 +1113,7 @@ var NativeFavoritesService = class {
     });
   }
   async getAll() {
+    await this.ensureInitialized();
     return [...this.items];
   }
   async add(item) {

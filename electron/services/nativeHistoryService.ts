@@ -20,22 +20,42 @@ export class NativeHistoryService {
   private items: HistoryItem[] = [];
   private readonly HISTORY_FILE = 'history.json';
   private readonly FILE_VERSION = '1.0.0';
+  private initializationPromise: Promise<void> | null = null;
 
   /**
    * Initialize service by loading history from disk
    * Must be called after construction
    */
   async initialize(): Promise<void> {
-    const fileData = await readJsonFile<HistoryFileFormat>(this.HISTORY_FILE, {
-      version: this.FILE_VERSION,
-      data: [],
-    });
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
 
-    // Convert date strings back to Date objects
-    this.items = fileData.data.map((item) => ({
-      ...item,
-      downloadedAt: new Date(item.downloadedAt),
-    }));
+    this.initializationPromise = (async () => {
+      const fileData = await readJsonFile<HistoryFileFormat>(this.HISTORY_FILE, {
+        version: this.FILE_VERSION,
+        data: [],
+      });
+
+      // Convert date strings back to Date objects
+      this.items = fileData.data.map((item) => ({
+        ...item,
+        downloadedAt: new Date(item.downloadedAt),
+      }));
+    })();
+
+    return this.initializationPromise;
+  }
+
+  /**
+   * Ensure service is initialized before proceeding
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initializationPromise) {
+      await this.initialize();
+    } else {
+      await this.initializationPromise;
+    }
   }
 
   /**
@@ -49,6 +69,7 @@ export class NativeHistoryService {
   }
 
   async getAll(): Promise<HistoryItem[]> {
+    await this.ensureInitialized();
     return [...this.items];
   }
 

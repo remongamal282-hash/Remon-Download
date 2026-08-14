@@ -42,8 +42,36 @@ export class MockFavoritesService implements FavoritesService {
   async add(item: FavoriteItem): Promise<FavoriteItem> {
     await this.delay();
     this.throwIfNeeded();
-    this.items = [item, ...this.items.filter((existingItem) => existingItem.sourceUrl !== item.sourceUrl)];
-    return item;
+    
+    // Normalize dateAdded to ensure it's always a valid ISO string
+    const dateAdded = this.normalizeDateString(item.dateAdded);
+    
+    const newItem = {
+      ...item,
+      dateAdded,
+    };
+    this.items = [newItem, ...this.items.filter((existingItem) => existingItem.sourceUrl !== newItem.sourceUrl)];
+    return newItem;
+  }
+
+  /**
+   * Normalize a date string to ensure it's a valid ISO format
+   * Handles null, undefined, and invalid date strings
+   */
+  private normalizeDateString(dateStr: string | undefined): string {
+    if (!dateStr) {
+      return new Date().toISOString();
+    }
+    
+    // Try to parse and validate the date
+    const parsedDate = new Date(dateStr);
+    if (isNaN(parsedDate.getTime())) {
+      // If invalid, return current timestamp
+      return new Date().toISOString();
+    }
+    
+    // Return the valid date in ISO format
+    return parsedDate.toISOString();
   }
 
   async remove(id: string): Promise<void> {

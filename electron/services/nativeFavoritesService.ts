@@ -15,26 +15,77 @@ interface FavoritesFileFormat {
   data: FavoriteItem[];
 }
 
+function isFavoritesFileFormat(value: unknown): value is FavoritesFileFormat {
+  return !!value && typeof value === 'object' && 'data' in value && Array.isArray((value as { data?: unknown }).data);
+}
+
+function normalizeFavoriteItem(item: Partial<FavoriteItem> | null | undefined): FavoriteItem | null {
+  if (!item || typeof item !== 'object') {
+    return null;
+  }
+
+  const dateValue = typeof item.dateAdded === 'string' ? item.dateAdded : new Date().toISOString();
+  const parsedDate = new Date(dateValue);
+  const normalizedDate = Number.isNaN(parsedDate.getTime()) ? new Date().toISOString() : parsedDate.toISOString();
+
+  return {
+    id: String(item.id ?? crypto.randomUUID()),
+    sourceUrl: String(item.sourceUrl ?? ''),
+    thumbnail: String(item.thumbnail ?? ''),
+    title: String(item.title ?? 'Untitled Favorite'),
+    channel: String(item.channel ?? 'Unknown channel'),
+    dateAdded: normalizedDate,
+  };
+}
+
 export class NativeFavoritesService {
   private items: FavoriteItem[] = [];
   private readonly FAVORITES_FILE = 'favorites.json';
   private readonly FILE_VERSION = '1.0.0';
+  private initializationPromise: Promise<void> | null = null;
 
   /**
    * Initialize service by loading favorites from disk
    * Must be called after construction
    */
   async initialize(): Promise<void> {
-    const fileData = await readJsonFile<FavoritesFileFormat>(
-      this.FAVORITES_FILE,
-      {
-        version: this.FILE_VERSION,
-        data: [],
-      }
-    );
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
 
-    // Data is already in correct format (dateAdded is string)
-    this.items = fileData.data;
+    this.initializationPromise = (async () => {
+      const fileData = await readJsonFile<unknown>(
+        this.FAVORITES_FILE,
+        {
+          version: this.FILE_VERSION,
+          data: [],
+        }
+      );
+
+      if (isFavoritesFileFormat(fileData)) {
+        this.items = fileData.data
+          .map((item) => normalizeFavoriteItem(item as Partial<FavoriteItem>))
+          .filter((item): item is FavoriteItem => item !== null);
+        return;
+      }
+
+      // Backward compatibility: older or malformed favorites files may be stored
+      // as a bare array or any other non-standard structure. Fall back safely.
+      this.items = [];
+    })();
+
+    return this.initializationPromise;
+  }
+
+  /**
+   * Ensure service is initialized before proceeding
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initializationPromise) {
+      await this.initialize();
+    } else {
+      await this.initializationPromise;
+    }
   }
 
   /**
@@ -48,6 +99,7 @@ export class NativeFavoritesService {
   }
 
   async getAll(): Promise<FavoriteItem[]> {
+    await this.ensureInitialized();
     return [...this.items];
   }
 
