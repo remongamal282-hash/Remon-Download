@@ -10,6 +10,29 @@
 
 import type { AnalysisResult, DownloadItem, FavoriteItem, HistoryItem, ScheduledDownload } from "./download";
 import type { AppSettings } from "./settings";
+import type { AppErrorCode } from "./errors";
+
+/**
+ * Download progress event payload
+ */
+export interface DownloadProgressPayload {
+  id: string;
+  progress: number;
+  downloadedSize: number;
+  totalSize: number;
+  speed: number;
+  eta: string;
+}
+
+/**
+ * Download state change event payload
+ */
+export interface DownloadStateChangePayload {
+  id: string;
+  status: import("./download").DownloadStatus;
+  errorCode?: AppErrorCode;
+  errorMessage?: string;
+}
 
 export interface ElectronAPI {
   readonly isElectron: true;
@@ -28,6 +51,10 @@ export interface ElectronAPI {
     retry(id: string): Promise<DownloadItem>;
     remove(id: string): Promise<string>;
     reorder(orderedIds: string[]): Promise<DownloadItem[]>;
+
+    // Event listeners
+    onProgress(callback: (data: DownloadProgressPayload) => void): () => void;
+    onStateChange(callback: (data: DownloadStateChangePayload) => void): () => void;
   };
 
   settings: {
@@ -66,4 +93,4 @@ declare global {
   }
 }
 
-export {};
+export { };

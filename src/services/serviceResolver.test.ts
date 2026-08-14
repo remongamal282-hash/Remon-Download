@@ -34,6 +34,7 @@ import { MockSchedulerService } from "../services/schedulerService";
 import { LocalStorageSettingsService } from "../services/settingsService";
 import {
   ElectronMetadataService,
+  ElectronDownloadService,
   ElectronHistoryService,
   ElectronFavoritesService,
   ElectronSchedulerService
@@ -43,7 +44,22 @@ import {
 
 function installFakeElectronAPI() {
   Object.defineProperty(window, "electronAPI", {
-    value: { isElectron: true },
+    value: {
+      isElectron: true,
+      download: {
+        onProgress: vi.fn(() => () => { }),  // Returns unsubscribe function
+        onStateChange: vi.fn(() => () => { }), // Returns unsubscribe function
+        add: vi.fn(),
+        getAll: vi.fn(async () => []),
+        start: vi.fn(),
+        pause: vi.fn(),
+        resume: vi.fn(),
+        cancel: vi.fn(),
+        retry: vi.fn(),
+        remove: vi.fn(),
+        reorder: vi.fn()
+      }
+    },
     writable: true,
     configurable: true
   });
@@ -113,9 +129,8 @@ describe("serviceResolver", () => {
       expect(resolveMetadataService()).toBeInstanceOf(ElectronMetadataService);
     });
 
-    it("resolveDownloadService still returns MockDownloadService (stateless pure functions)", () => {
-      // DownloadService is a stateless helper — same impl in both modes
-      expect(resolveDownloadService()).toBeInstanceOf(MockDownloadService);
+    it("resolveDownloadService returns ElectronDownloadService in Electron mode", () => {
+      expect(resolveDownloadService()).toBeInstanceOf(ElectronDownloadService);
     });
 
     it("resolveHistoryService returns ElectronHistoryService", () => {

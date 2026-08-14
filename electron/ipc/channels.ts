@@ -30,6 +30,16 @@ export const IPC_CHANNELS = {
   SCHEDULER_REMOVE: "scheduler:remove"
 } as const;
 
+/**
+ * IPC Event Channels (Main → Renderer push events, not request/response)
+ */
+export const IPC_EVENTS = {
+  DOWNLOAD_PROGRESS: "download:progress",
+  DOWNLOAD_STATE_CHANGE: "download:state-change"
+} as const;
+
+export type IpcEventChannel = (typeof IPC_EVENTS)[keyof typeof IPC_EVENTS];
+
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 
 export type IpcResult<T> =
@@ -91,3 +101,23 @@ export interface IpcContractResponses {
   [IPC_CHANNELS.SCHEDULER_CANCEL]: ScheduledDownload;
   [IPC_CHANNELS.SCHEDULER_REMOVE]: string;
 }
+
+/**
+ * IPC Event Payloads (Main → Renderer push events)
+ */
+export interface DownloadProgressPayload {
+  id: string;
+  progress: number;
+  downloadedSize: number;
+  totalSize: number;
+  speed: number;
+  eta: string;
+}
+
+export interface DownloadStateChangePayload {
+  id: string;
+  status: import("../../src/types/download").DownloadStatus;
+  errorCode?: import("../../src/types/errors").AppErrorCode;
+  errorMessage?: string;
+}
+

@@ -1,5 +1,5 @@
-import { ipcMain } from "electron";
-import { IPC_CHANNELS, type IpcResult } from "./channels";
+import { ipcMain, BrowserWindow } from "electron";
+import { IPC_CHANNELS, IPC_EVENTS, type IpcResult, type DownloadProgressPayload, type DownloadStateChangePayload } from "./channels";
 import { NativeMetadataService } from "../services/nativeMetadataService";
 import { NativeDownloadService } from "../services/nativeDownloadService";
 import { NativeSettingsService } from "../services/nativeSettingsService";
@@ -23,11 +23,54 @@ function wrapError<T>(err: unknown): IpcResult<T> {
 }
 
 export function registerIpcHandlers(): void {
-  const downloadService = new NativeDownloadService();
   const settingsService = new NativeSettingsService();
   const historyService = new NativeHistoryService();
   const favoritesService = new NativeFavoritesService();
   const schedulerService = new NativeSchedulerService();
+
+  // Initialize NativeDownloadService with settings (async)
+  let downloadService: NativeDownloadService | null = null;
+  let downloadServiceReady = false;
+
+  const initDownloadService = async () => {
+    try {
+      const settings = await settingsService.get();
+      downloadService = new NativeDownloadService(settings);
+      downloadServiceReady = true;
+
+      // Forward download progress events to Renderer
+      downloadService.on("download:progress", (payload: DownloadProgressPayload) => {
+        const windows = BrowserWindow.getAllWindows();
+        windows.forEach((win) => {
+          win.webContents.send(IPC_EVENTS.DOWNLOAD_PROGRESS, payload);
+        });
+      });
+
+      // Forward download state change events to Renderer
+      downloadService.on("download:state-change", (payload: DownloadStateChangePayload) => {
+        const windows = BrowserWindow.getAllWindows();
+        windows.forEach((win) => {
+          win.webContents.send(IPC_EVENTS.DOWNLOAD_STATE_CHANGE, payload);
+        });
+      });
+    } catch (err) {
+      console.error("Failed to initialize NativeDownloadService:", err);
+    }
+  };
+
+  // Initialize on first call
+  void initDownloadService();
+
+  // Helper to ensure downloadService is ready
+  const ensureDownloadService = async (): Promise<NativeDownloadService> => {
+    if (!downloadServiceReady || !downloadService) {
+      await initDownloadService();
+      if (!downloadService) {
+        throw new Error("Failed to initialize download service");
+      }
+    }
+    return downloadService;
+  };
 
   // Metadata - creates new instance per request to use latest settings
   ipcMain.handle(IPC_CHANNELS.METADATA_ANALYZE, async (_, { url }) => {
@@ -44,7 +87,8 @@ export function registerIpcHandlers(): void {
   // Download
   ipcMain.handle(IPC_CHANNELS.DOWNLOAD_GET_ALL, async () => {
     try {
-      const data = await downloadService.getAll();
+      const service = await ensureDownloadService();
+      const data = await service.getAll();
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -53,7 +97,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.DOWNLOAD_ADD, async (_, { item }) => {
     try {
-      const data = await downloadService.add(item);
+      const service = await ensureDownloadService();
+      const data = await service.add(item);
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -62,7 +107,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.DOWNLOAD_START, async (_, { id }) => {
     try {
-      const data = await downloadService.start(id);
+      const service = await ensureDownloadService();
+      const data = await service.start(id);
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -71,7 +117,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.DOWNLOAD_PAUSE, async (_, { id }) => {
     try {
-      const data = await downloadService.pause(id);
+      const service = await ensureDownloadService();
+      const data = await service.pause(id);
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -80,7 +127,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.DOWNLOAD_RESUME, async (_, { id }) => {
     try {
-      const data = await downloadService.resume(id);
+      const service = await ensureDownloadService();
+      const data = await service.resume(id);
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -89,7 +137,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.DOWNLOAD_CANCEL, async (_, { id }) => {
     try {
-      const data = await downloadService.cancel(id);
+      const service = await ensureDownloadService();
+      const data = await service.cancel(id);
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -98,7 +147,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.DOWNLOAD_RETRY, async (_, { id }) => {
     try {
-      const data = await downloadService.retry(id);
+      const service = await ensureDownloadService();
+      const data = await service.retry(id);
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -107,7 +157,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.DOWNLOAD_REMOVE, async (_, { id }) => {
     try {
-      const data = await downloadService.remove(id);
+      const service = await ensureDownloadService();
+      const data = await service.remove(id);
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -116,7 +167,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC_CHANNELS.DOWNLOAD_REORDER, async (_, { orderedIds }) => {
     try {
-      const data = await downloadService.reorder(orderedIds);
+      const service = await ensureDownloadService();
+      const data = await service.reorder(orderedIds);
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -133,9 +185,13 @@ export function registerIpcHandlers(): void {
     }
   });
 
+  // SETTINGS_UPDATE handler already defined above (with downloadService.updateSettings)
   ipcMain.handle(IPC_CHANNELS.SETTINGS_UPDATE, async (_, { settings }) => {
     try {
       const data = await settingsService.update(settings);
+      if (downloadService) {
+        downloadService.updateSettings(data);
+      }
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -145,6 +201,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SETTINGS_RESET, async () => {
     try {
       const data = await settingsService.reset();
+      if (downloadService) {
+        downloadService.updateSettings(data);
+      }
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);

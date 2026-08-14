@@ -11,7 +11,7 @@
  */
 
 import { contextBridge, ipcRenderer } from "electron";
-import { IPC_CHANNELS, type IpcResult } from "./ipc/channels";
+import { IPC_CHANNELS, IPC_EVENTS, type IpcResult } from "./ipc/channels";
 import type { AnalysisResult, DownloadItem, FavoriteItem, HistoryItem, ScheduledDownload } from "../src/types/download";
 import type { AppSettings } from "../src/types/settings";
 import type { ElectronAPI } from "../src/types/electron";
@@ -45,7 +45,22 @@ const electronAPI: ElectronAPI = {
     retry: (id: string): Promise<DownloadItem> => invoke(IPC_CHANNELS.DOWNLOAD_RETRY, { id }),
     remove: (id: string): Promise<string> => invoke(IPC_CHANNELS.DOWNLOAD_REMOVE, { id }),
     reorder: (orderedIds: string[]): Promise<DownloadItem[]> =>
-      invoke(IPC_CHANNELS.DOWNLOAD_REORDER, { orderedIds })
+      invoke(IPC_CHANNELS.DOWNLOAD_REORDER, { orderedIds }),
+
+    // Event listeners for progress and state changes
+    onProgress: (callback: (data: any) => void): (() => void) => {
+      const listener = (_event: any, data: any) => callback(data);
+      ipcRenderer.on(IPC_EVENTS.DOWNLOAD_PROGRESS, listener);
+      // Return unsubscribe function
+      return () => ipcRenderer.removeListener(IPC_EVENTS.DOWNLOAD_PROGRESS, listener);
+    },
+
+    onStateChange: (callback: (data: any) => void): (() => void) => {
+      const listener = (_event: any, data: any) => callback(data);
+      ipcRenderer.on(IPC_EVENTS.DOWNLOAD_STATE_CHANGE, listener);
+      // Return unsubscribe function
+      return () => ipcRenderer.removeListener(IPC_EVENTS.DOWNLOAD_STATE_CHANGE, listener);
+    }
   },
 
   settings: {

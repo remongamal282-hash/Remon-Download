@@ -21,11 +21,9 @@
  * This is the documented architectural trade-off for Phase 2 Foundation.
  *
  * NOTE on DownloadService:
- * DownloadService is a stateless pure-function service (state machine helpers,
- * item factories). In Electron mode, actual downloads are performed by the
- * Native Main Process — the Renderer still uses MockDownloadService for the
- * in-memory queue UI. A dedicated ElectronDownloadService adapter will be added
- * in a future phase when the progress push-event IPC pattern is implemented.
+ * In Mock mode: tick() drives progress simulation.
+ * In Electron mode: progress comes from IPC events (onProgress, onStateChange).
+ * ElectronDownloadService maintains a local cache updated by events.
  */
 
 import { MockMetadataService } from "./metadataService";
@@ -36,6 +34,7 @@ import { MockSchedulerService } from "./schedulerService";
 import { LocalStorageSettingsService } from "./settingsService";
 import {
   ElectronMetadataService,
+  ElectronDownloadService,
   ElectronHistoryService,
   ElectronFavoritesService,
   ElectronSchedulerService
@@ -79,14 +78,15 @@ export function resolveMetadataService(): MetadataService {
 }
 
 /**
- * DownloadService is a stateless pure-function service used by queueStore.
- * In Electron mode the Renderer still uses MockDownloadService for the
- * in-memory queue UI; actual downloads are delegated to the Main Process
- * via IPC in a future push-event phase.
+ * DownloadService resolver.
+ * In Electron mode: uses ElectronDownloadService with IPC event-driven progress.
+ * In Web/Vitest mode: uses MockDownloadService with tick-based simulation.
  */
 export function resolveDownloadService(): DownloadService {
   if (!_downloadService) {
-    _downloadService = new MockDownloadService();
+    _downloadService = isElectronEnvironment()
+      ? new ElectronDownloadService()
+      : new MockDownloadService();
   }
   return _downloadService;
 }
