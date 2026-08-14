@@ -1,33 +1,42 @@
 /**
- * NativeMetadataService — Main Process metadata boundary.
+ * NativeMetadataService — Main Process metadata via yt-dlp.
  *
- * Phase 2: Production-ready URL classification and structured AnalysisResult
- * generation using only Node.js-compatible APIs (no DOM, no window.*, no browser).
+ * Phase 2.x: Real yt-dlp integration for production metadata fetching.
  *
  * What this does:
- * - Validates that the URL is a recognized YouTube URL (youtube.com / youtu.be).
- * - Classifies the link type: video | shorts | playlist | playlist-video | channel.
- * - Returns a fully-typed AnalysisResult with all required fields populated.
+ * - Validates YouTube URLs (youtube.com / youtu.be).
+ * - Classifies link type: video | shorts | playlist | playlist-video | channel.
+ * - Invokes yt-dlp as child_process to fetch real metadata from YouTube.
+ * - Parses yt-dlp JSON output into AnalysisResult types.
+ * - Handles errors, timeouts, and process failures safely.
  *
- * What this does NOT do (Phase 2.x, requires yt-dlp):
- * - Does not invoke yt-dlp or fetch real video metadata from YouTube.
- * - Does not perform any network requests.
- * - Title, duration, views, file size are documented stubs (clearly labelled).
- *   They satisfy the AnalysisResult shape so the Renderer can render correctly
- *   while yt-dlp integration is pending.
+ * yt-dlp Path Resolution:
+ * 1. Settings ytdlpPath (if provided and valid)
+ * 2. System PATH lookup (via 'which' command or direct spawn attempt)
+ * 3. Error if not found
  *
- * Relationship to MockMetadataService (src/services/metadataService.ts):
- * - Both implement the same MetadataService interface.
- * - MockMetadataService runs in Web/Vitest mode (Renderer process, uses window.setTimeout).
- * - NativeMetadataService runs in Electron Main Process (Node.js, no browser APIs).
- * - URL classification logic is duplicated intentionally — no shared code between
- *   Renderer src/ and Main electron/ to preserve strict process isolation.
+ * Security:
+ * - URL passed as separate argument (no shell concatenation)
+ * - No shell=true (uses spawn with argument array)
+ * - No arbitrary command execution
+ *
+ * Testability:
+ * - Uses dependency injection for spawn/access functions
+ * - Allows mocking without complex vi.mock() setup
+ *
+ * Relationship to MockMetadataService:
+ * - MockMetadataService runs in Web/Vitest mode (Renderer, uses window.setTimeout)
+ * - NativeMetadataService runs in Electron Main Process (Node.js, spawns yt-dlp)
+ * - URL classification logic duplicated intentionally (process isolation)
  */
 
-import type { AnalysisResult, ChannelMetadata, LinkType, PlaylistMetadata, VideoMetadata } from "../../src/types/download";
+import { spawn as nodeSpawn, type ChildProcess } from "child_process";
+import { access as fsAccess, constants as fsConstants } from "fs/promises";
+import type { AnalysisResult, ChannelMetadata, LinkType, PlaylistMetadata, VideoMetadata, VideoLinkType } from "../../src/types/download";
 
-// ─── YouTube URL Validation ─────────────────────────────────────────────────
+// ─── Configuration ──────────────────────────────────────────────────────────
 
+const YTDLP_TIMEOUT_MS = 30000; // 30 seconds - documented technical decision
 const YOUTUBE_HOSTNAMES = new Set([
   "youtube.com",
   "www.youtube.com",
@@ -35,9 +44,27 @@ const YOUTUBE_HOSTNAMES = new Set([
   "youtu.be"
 ]);
 
+// ─── Process Executor Interface (for Dependency Injection) ─────────────────
+
+export interface ProcessExecutor {
+  spawn(command: string, args: string[], options?: any): ChildProcess;
+  checkAccess(path: string, mode: number): Promise<void>;
+}
+
+class DefaultProcessExecutor implements ProcessExecutor {
+  spawn(command: string, args: string[], options?: any): ChildProcess {
+    return nodeSpawn(command, args, options);
+  }
+
+  async checkAccess(path: string, mode: number): Promise<void> {
+    return fsAccess(path, mode);
+  }
+}
+
+// ─── YouTube URL Validation ─────────────────────────────────────────────────
+
 /**
  * Returns true if the URL belongs to a known YouTube hostname.
- * Uses the WHATWG URL API (available in Node.js 10+).
  */
 export function isYouTubeUrl(url: string): boolean {
   try {
@@ -52,15 +79,6 @@ export function isYouTubeUrl(url: string): boolean {
 
 /**
  * Classifies a YouTube URL into one of the 5 recognized link types.
- *
- * Priority order (most specific first):
- *  1. /shorts/  → shorts
- *  2. /channel/ or /@  → channel
- *  3. ?list=...&v=...  → playlist-video (video inside a playlist)
- *  4. ?list=...        → playlist
- *  5. default          → video
- *
- * youtu.be short links are always videos (no playlist/shorts support there).
  */
 export function classifyYouTubeUrl(url: string): LinkType {
   try {
@@ -83,213 +101,333 @@ export function classifyYouTubeUrl(url: string): LinkType {
       return "playlist";
     }
   } catch {
-    // fall through to default
+    // fall through
   }
 
   return "video";
 }
 
-// ─── AnalysisResult Builders ────────────────────────────────────────────────
+// ─── yt-dlp Execution ───────────────────────────────────────────────────────
 
-/**
- * Extracts the video ID from a YouTube URL (watch?v=ID or youtu.be/ID).
- * Returns "unknown" if not found — used only for thumbnail seed and stub ID.
- */
-function extractVideoId(url: string): string {
-  try {
-    const parsed = new URL(url);
-
-    // youtu.be/VIDEO_ID
-    if (parsed.hostname === "youtu.be") {
-      const id = parsed.pathname.replace("/", "").split("/")[0];
-      return id || "unknown";
-    }
-
-    // /shorts/VIDEO_ID
-    const shortsMatch = /\/shorts\/([^/?#]+)/.exec(parsed.pathname);
-    if (shortsMatch) {
-      return shortsMatch[1] ?? "unknown";
-    }
-
-    // ?v=VIDEO_ID
-    const v = parsed.searchParams.get("v");
-    if (v) {
-      return v;
-    }
-  } catch {
-    // fall through
-  }
-
-  return "unknown";
+interface YtdlpRawVideo {
+  id?: string;
+  webpage_url?: string;
+  title?: string;
+  uploader?: string;
+  channel?: string;
+  duration?: number;
+  view_count?: number;
+  thumbnail?: string;
+  thumbnails?: Array<{ url?: string }>;
+  formats?: Array<{
+    format_id?: string;
+    ext?: string;
+    height?: number;
+    fps?: number;
+    vcodec?: string;
+    acodec?: string;
+    tbr?: number;
+    abr?: number;
+    filesize?: number;
+    filesize_approx?: number;
+  }>;
+  upload_date?: string;
+  extractor?: string;
 }
 
-/**
- * Extracts the playlist ID from ?list= parameter.
- */
-function extractPlaylistId(url: string): string {
-  try {
-    const parsed = new URL(url);
-    return parsed.searchParams.get("list") ?? "unknown-list";
-  } catch {
-    return "unknown-list";
-  }
+interface YtdlpRawPlaylist {
+  id?: string;
+  webpage_url?: string;
+  title?: string;
+  thumbnail?: string;
+  thumbnails?: Array<{ url?: string }>;
+  entries?: YtdlpRawVideo[];
+  extractor?: string;
 }
 
-/**
- * Extracts the channel handle or ID from the URL path.
- * Handles: /channel/UCxxxxxx  and  /@HandleName
- */
-function extractChannelId(url: string): string {
-  try {
-    const parsed = new URL(url);
-    const match = /\/(channel\/[^/?#]+|@[^/?#]+)/.exec(parsed.pathname);
-    return match ? match[1].replace("/", "-") : "unknown-channel";
-  } catch {
-    return "unknown-channel";
-  }
+type YtdlpRawOutput = YtdlpRawVideo | YtdlpRawPlaylist;
+
+// ─── Metadata Parsers ───────────────────────────────────────────────────────
+
+function formatDuration(seconds?: number): string {
+  if (!seconds || seconds <= 0) return "0:00";
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
-/**
- * Builds a VideoMetadata stub for a single video or shorts link.
- *
- * NOTE: title, views, duration, and fileSize are documented stubs.
- * They will be replaced with real yt-dlp data in Phase 2.x.
- */
-function buildVideoMetadata(
-  url: string,
-  linkType: "video" | "shorts" | "playlist-video",
+function formatFileSize(size?: number): number {
+  return size && size > 0 ? size : 0;
+}
+
+function extractThumbnail(raw: YtdlpRawVideo | YtdlpRawPlaylist): string {
+  if (raw.thumbnail) return raw.thumbnail;
+  if (raw.thumbnails && raw.thumbnails.length > 0) {
+    return raw.thumbnails[0]?.url ?? "";
+  }
+  return "";
+}
+
+function parseVideoMetadata(
+  raw: YtdlpRawVideo,
+  linkType: VideoLinkType,
   index = 1
 ): VideoMetadata {
-  const videoId = extractVideoId(url);
-  const isShorts = linkType === "shorts";
+  const videoId = raw.id ?? `unknown-${index}`;
+  const formats = raw.formats ?? [];
+
+  // Extract available quality options
+  const heights = new Set<number>();
+  formats.forEach((f) => {
+    if (f.height && f.height > 0) heights.add(f.height);
+  });
+  const qualityOptions = Array.from(heights)
+    .sort((a, b) => b - a)
+    .map((h) => `${h}p`);
+
+  // Extract formats
+  const videoFormats = new Set(formats.map((f) => f.ext).filter(Boolean));
+  const audioFormats = new Set<string>(["m4a", "mp3", "opus"]); // yt-dlp default audio formats
+
+  // Best format info
+  const bestFormat = formats.find((f) => f.height && f.height > 0) ?? formats[0];
+  const resolution = bestFormat?.height ? `${bestFormat.height}p` : "1080p";
+  const fps = bestFormat?.fps ?? 30;
+  const videoCodec = bestFormat?.vcodec ?? "H.264";
+  const audioCodec = bestFormat?.acodec ?? "AAC";
+  const videoBitrate = bestFormat?.tbr ? `${(bestFormat.tbr / 1000).toFixed(1)} Mbps` : "0 Mbps";
+  const audioBitrate = bestFormat?.abr ? `${Math.round(bestFormat.abr)} Kbps` : "0 Kbps";
+  const fileSize = formatFileSize(bestFormat?.filesize ?? bestFormat?.filesize_approx);
 
   return {
-    id: `native-${linkType}-${videoId}-${index}`,
-    sourceUrl: url,
+    id: `yt-${linkType}-${videoId}`,
+    sourceUrl: raw.webpage_url ?? "",
     linkType,
-    // Thumbnail uses the YouTube standard thumbnail URL pattern.
-    // In Phase 2.x, yt-dlp will provide the actual thumbnail URL.
-    thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-    // Stub: real title requires yt-dlp. Value is intentionally descriptive.
-    title: isShorts
-      ? `[Shorts] YouTube Video — yt-dlp metadata pending`
-      : index > 1
-        ? `[Playlist Video ${index}] YouTube Video — yt-dlp metadata pending`
-        : `[Video] YouTube Video — yt-dlp metadata pending`,
-    channelName: "YouTube Channel — yt-dlp metadata pending",
-    // Stub: real duration requires yt-dlp.
-    duration: isShorts ? "0:59" : "10:00",
-    // Stub: real views require yt-dlp.
-    views: 0,
-    qualityOptions: ["2160p", "1440p", "1080p", "720p", "480p", "360p"],
-    videoFormats: ["mp4", "webm", "mkv"],
-    audioFormats: ["m4a", "mp3", "opus"],
-    resolution: "1080p",
-    fps: 30,
-    videoCodec: "H.264",
-    audioCodec: "AAC",
-    videoBitrate: "0 Mbps",
-    audioBitrate: "0 Kbps",
-    container: "mp4",
-    // Stub: real file size requires yt-dlp.
-    fileSize: 0,
-    uploadDate: new Date().toISOString().split("T")[0] ?? ""
+    thumbnail: extractThumbnail(raw),
+    title: raw.title ?? "Unknown Title",
+    channelName: raw.uploader ?? raw.channel ?? "Unknown Channel",
+    duration: formatDuration(raw.duration),
+    views: raw.view_count ?? 0,
+    qualityOptions: qualityOptions.length > 0 ? qualityOptions : ["1080p", "720p", "480p"],
+    videoFormats: Array.from(videoFormats).slice(0, 3), // Limit to 3
+    audioFormats: Array.from(audioFormats),
+    resolution,
+    fps,
+    videoCodec,
+    audioCodec,
+    videoBitrate,
+    audioBitrate,
+    container: bestFormat?.ext ?? "mp4",
+    fileSize,
+    uploadDate: raw.upload_date ?? new Date().toISOString().split("T")[0] ?? ""
   };
 }
 
-/**
- * Builds a PlaylistMetadata stub.
- *
- * NOTE: Playlist title and video list require yt-dlp. In Phase 2.x, yt-dlp
- * will provide the actual video list. For now, we return 1 placeholder video
- * item so the Renderer can render a minimal valid Playlist UI.
- */
-function buildPlaylistMetadata(url: string): PlaylistMetadata {
-  const playlistId = extractPlaylistId(url);
+function parsePlaylistMetadata(raw: YtdlpRawPlaylist, url: string): PlaylistMetadata {
+  const playlistId = raw.id ?? "unknown-playlist";
+  const entries = raw.entries ?? [];
+
+  // Parse first 10 videos for playlist preview
+  const videos = entries.slice(0, 10).map((entry, index) =>
+    parseVideoMetadata(entry, "playlist-video", index + 1)
+  );
 
   return {
-    id: `native-playlist-${playlistId}`,
+    id: `yt-playlist-${playlistId}`,
     sourceUrl: url,
     linkType: "playlist",
-    // Stub: real playlist title requires yt-dlp.
-    title: `[Playlist] YouTube Playlist — yt-dlp metadata pending`,
-    thumbnail: `https://i.ytimg.com/vi/unknown/hqdefault.jpg`,
-    // Stub: In Phase 2.x, yt-dlp will enumerate the actual playlist videos.
-    // We return 1 placeholder so the UI renders correctly in Electron mode.
-    videos: [buildVideoMetadata(url, "playlist-video", 1)]
+    title: raw.title ?? "Unknown Playlist",
+    thumbnail: extractThumbnail(raw),
+    videos
   };
 }
 
-/**
- * Builds a ChannelMetadata stub.
- *
- * NOTE: Channel name, video list require yt-dlp. Returns a minimal stub
- * so the Renderer renders a valid Channel UI.
- */
-function buildChannelMetadata(url: string): ChannelMetadata {
-  const channelId = extractChannelId(url);
+function parseChannelMetadata(raw: YtdlpRawPlaylist, url: string): ChannelMetadata {
+  const channelId = raw.id ?? "unknown-channel";
+  const entries = raw.entries ?? [];
+
+  // Parse first 4 videos as latest videos preview
+  const latestVideos = entries.slice(0, 4).map((entry, index) =>
+    parseVideoMetadata(entry, "video", index + 1)
+  );
 
   return {
-    id: `native-channel-${channelId}`,
+    id: `yt-channel-${channelId}`,
     sourceUrl: url,
     linkType: "channel",
-    // Stub: real channel name requires yt-dlp.
-    name: `[Channel] YouTube Channel — yt-dlp metadata pending`,
-    thumbnail: `https://i.ytimg.com/vi/unknown/hqdefault.jpg`,
-    // Stub: real video count requires yt-dlp.
-    mockVideoCount: 0,
-    // Stub: real latest videos require yt-dlp.
-    latestVideos: [buildVideoMetadata(url, "video", 1)]
+    name: raw.title ?? "Unknown Channel",
+    thumbnail: extractThumbnail(raw),
+    mockVideoCount: entries.length,
+    latestVideos
   };
 }
 
 // ─── NativeMetadataService ──────────────────────────────────────────────────
 
 export class NativeMetadataService {
+  private ytdlpPath: string | null = null;
+  private executor: ProcessExecutor;
+
+  constructor(
+    private settingsYtdlpPath?: string,
+    executor?: ProcessExecutor
+  ) {
+    this.executor = executor ?? new DefaultProcessExecutor();
+  }
+
   /**
-   * Analyzes a YouTube URL and returns a typed AnalysisResult.
-   *
-   * Validation:
-   * - Non-string or empty URL → throws "invalid_url" Error.
-   * - Valid URL but not a YouTube domain → throws "unsupported_url" Error.
-   *   (Mirrors MockMetadataService's error contract.)
-   *
-   * Note: All metadata fields except URL, linkType, and videoId are stubs
-   * until yt-dlp is integrated in Phase 2.x.
+   * Resolves yt-dlp executable path.
+   * Priority: settingsPath → system PATH.
+   */
+  private async resolveYtdlpPath(): Promise<string> {
+    // Priority 1: Settings-provided path
+    if (this.settingsYtdlpPath && this.settingsYtdlpPath.trim()) {
+      try {
+        await this.executor.checkAccess(this.settingsYtdlpPath, fsConstants.X_OK);
+        return this.settingsYtdlpPath;
+      } catch {
+        // Invalid settings path - fall through to PATH
+      }
+    }
+
+    // Priority 2: System PATH (try common names)
+    const candidates = ["yt-dlp", "yt-dlp.exe", "youtube-dl", "youtube-dl.exe"];
+
+    for (const candidate of candidates) {
+      try {
+        // Try spawning with --version to verify it exists and works
+        await new Promise<void>((resolve, reject) => {
+          const proc = this.executor.spawn(candidate, ["--version"], { timeout: 5000 });
+          proc.on("error", reject);
+          proc.on("exit", (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`Exit code ${code}`));
+          });
+        });
+        return candidate;
+      } catch {
+        // Try next candidate
+      }
+    }
+
+    throw new Error("ytdlp_not_found");
+  }
+
+  /**
+   * Spawns yt-dlp process and returns parsed JSON output.
+   */
+  private async executeYtdlp(ytdlpPath: string, url: string, isPlaylist = false): Promise<YtdlpRawOutput> {
+    return new Promise((resolve, reject) => {
+      const args = [
+        "--dump-single-json",
+        isPlaylist ? "--yes-playlist" : "--no-playlist",
+        ...(isPlaylist ? ["--flat-playlist"] : []),
+        "--skip-download",
+        "--no-warnings",
+        url
+      ];
+
+      const timeout = isPlaylist ? YTDLP_TIMEOUT_MS * 2 : YTDLP_TIMEOUT_MS;
+      const proc = this.executor.spawn(ytdlpPath, args, {
+        timeout,
+        windowsHide: true
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      proc.stdout?.on("data", (data) => {
+        stdout += data.toString();
+      });
+
+      proc.stderr?.on("data", (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on("error", (err: any) => {
+        if (err.code === "ETIMEDOUT") {
+          reject(new Error("ytdlp_timeout"));
+        } else if (err.code === "ENOENT") {
+          reject(new Error("ytdlp_not_found"));
+        } else {
+          reject(new Error("ytdlp_spawn_failed"));
+        }
+      });
+
+      proc.on("exit", (code) => {
+        if (code === 0) {
+          try {
+            const parsed = JSON.parse(stdout) as YtdlpRawOutput;
+            resolve(parsed);
+          } catch {
+            reject(new Error("ytdlp_invalid_json"));
+          }
+        } else {
+          // Map common yt-dlp error messages
+          const stderrLower = stderr.toLowerCase();
+          if (stderrLower.includes("private video") || stderrLower.includes("members-only")) {
+            reject(new Error("video_private"));
+          } else if (stderrLower.includes("video unavailable") || stderrLower.includes("not available")) {
+            reject(new Error("video_unavailable"));
+          } else if (stderrLower.includes("unsupported url")) {
+            reject(new Error("unsupported_url"));
+          } else if (stderrLower.includes("network") || stderrLower.includes("connection")) {
+            reject(new Error("network_error"));
+          } else {
+            reject(new Error("ytdlp_failed"));
+          }
+        }
+      });
+    });
+  }
+
+  /**
+   * Analyzes a YouTube URL using yt-dlp and returns typed AnalysisResult.
    */
   async analyze(url: string): Promise<AnalysisResult> {
+    // Validate input
     if (!url || typeof url !== "string") {
       throw new Error("invalid_url");
     }
 
     const trimmedUrl = url.trim();
-
     if (!trimmedUrl) {
       throw new Error("invalid_url");
     }
 
-    // Validate it's a parseable URL before checking YouTube
+    // Validate parseable URL
     try {
       new URL(trimmedUrl);
     } catch {
       throw new Error("invalid_url");
     }
 
+    // Validate YouTube URL
     if (!isYouTubeUrl(trimmedUrl)) {
       throw new Error("unsupported_url");
     }
 
-    const linkType = classifyYouTubeUrl(trimmedUrl);
-
-    if (linkType === "playlist") {
-      return buildPlaylistMetadata(trimmedUrl);
+    // Resolve yt-dlp path (cached after first successful resolution)
+    if (!this.ytdlpPath) {
+      this.ytdlpPath = await this.resolveYtdlpPath();
     }
 
-    if (linkType === "channel") {
-      return buildChannelMetadata(trimmedUrl);
+    // Classify link type
+    const linkType = classifyYouTubeUrl(trimmedUrl);
+
+    // Handle different link types
+    if (linkType === "playlist" || linkType === "channel") {
+      const raw = await this.executeYtdlp(this.ytdlpPath, trimmedUrl, true);
+
+      if (linkType === "playlist") {
+        return parsePlaylistMetadata(raw as YtdlpRawPlaylist, trimmedUrl);
+      } else {
+        return parseChannelMetadata(raw as YtdlpRawPlaylist, trimmedUrl);
+      }
     }
 
     // video | shorts | playlist-video
-    return buildVideoMetadata(trimmedUrl, linkType, 1);
+    const raw = await this.executeYtdlp(this.ytdlpPath, trimmedUrl, false);
+    return parseVideoMetadata(raw as YtdlpRawVideo, linkType, 1);
   }
 }

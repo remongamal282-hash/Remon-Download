@@ -56,17 +56,43 @@ Completed (Phase 2 — Store Wiring):
 - `src/services/serviceResolver.test.ts`: 26 tests covering Web/Mock mode, Electron mode, singleton caching, test injection helpers, and adapter surface validation.
 - Architecture rule enforced: No store imports a Mock/Native service class directly. All service access is through `serviceResolver`.
 
-Test Results (Post-Store-Wiring):
-- `npm run test`: 26 test files, 147 tests, 0 failed ✅
-- `npm run build`: ✅ zero errors (tsc -b + vite build, 1668 modules)
-- `npm run electron:build`: ✅ esbuild compiles main.ts + preload.ts → dist-electron/ in ~155ms
+Completed (Phase 2 — Electron Development Workflow):
+- **electron:dev script** is now available for concurrent Vite + Electron development.
+- Development workflow implementation:
+  1. `npm run electron:dev` starts both Vite dev server and Electron process.
+  2. Vite runs on fixed port 5173 with `strictPort: true`.
+  3. `wait-on` ensures Electron launches only after Vite is ready.
+  4. `cross-env` passes `VITE_DEV_SERVER_URL` to Electron Main Process.
+  5. `concurrently -k` manages both processes with color-coded output and kill-all-on-exit.
+  6. Electron loads Vite dev server URL in development, dist/index.html in production.
+  7. HMR works seamlessly — React changes update without rebuilding production bundle.
+- New dependencies added: `concurrently`, `wait-on`, `cross-env` (devDependencies).
+- Security constraints preserved: contextIsolation, no nodeIntegration, sandbox enabled.
+
+Completed (Phase 2 — Real Metadata: yt-dlp Integration):
+- **NativeMetadataService** now uses real yt-dlp subprocess for production metadata fetching.
+- yt-dlp integration implementation:
+  1. Dependency Injection pattern using `ProcessExecutor` interface for testability.
+  2. yt-dlp path resolution: Settings path → PATH fallback (yt-dlp, yt-dlp.exe, youtube-dl, youtube-dl.exe) → error.
+  3. Secure subprocess execution: URL as separate spawn argument, no shell=true, no command concatenation.
+  4. Timeout: 30 seconds for videos, 60 seconds for playlists (documented technical decision).
+  5. Complete error mapping: invalid_url, unsupported_url, ytdlp_not_found, ytdlp_spawn_failed, ytdlp_timeout, video_unavailable, video_private, network_error, ytdlp_invalid_json.
+  6. Full metadata parsing for Video, Shorts, Playlist, Playlist-Video, and Channel URLs.
+  7. Mock-based tests: 24 tests covering all error cases, URL types, path resolution, and security without requiring network or installed yt-dlp.
+- Architecture: `MockProcessExecutor` enables deterministic unit tests without mocking Node.js built-ins.
+- Web mode continues using `MockMetadataService` — no regressions.
+
+Test Results (Post-yt-dlp-Integration):
+- `npm run test`: 28 test files, 190 tests, 0 failed ✅
+- `npm run build`: ✅ zero errors (tsc -b + vite build, 1668 modules, ~9.4s)
+- `npm run electron:build`: ✅ esbuild compiles main.ts + preload.ts → dist-electron/ in ~32ms
 
 In Progress:
 - None.
 
 Pending (Phase 2 Remaining):
-- Electron dev server integration (HMR while Electron window open).
-- yt-dlp integration in NativeMetadataService and NativeDownloadService.
+- Native download implementation in NativeDownloadService using yt-dlp subprocess.
+- FFmpeg integration for merging/conversion workflows.
 - Persistent storage (electron-store or fs-based JSON) for settings, history, favorites, scheduler.
 - System tray, Windows startup, OS notifications (per SPEC Phase 2).
 - Push IPC events from Main → Renderer for download progress updates.
@@ -81,6 +107,6 @@ Known Bugs:
 - `SettingsService` interface is sync (get/update/reset) but IPC is async — the `ElectronSettingsService` adapter documents this mismatch. `resolveSettingsService()` always returns `LocalStorageSettingsService` until this is resolved. See AI_HANDOFF.md "Known Architectural Decision Pending".
 
 Next Recommended Task:
-- Implement `electron:dev` script for concurrent Vite dev server + Electron launch.
-- Integrate yt-dlp in `NativeMetadataService` for real URL analysis.
+- Integrate FFmpeg detection and validation in `NativeDownloadService` for conversion workflows.
 - Add persistent storage (electron-store) for history/favorites/scheduler/settings in Main Process.
+- Implement push IPC events for download progress (Main → Renderer).

@@ -50,7 +50,6 @@ function installFakeElectronAPI() {
 }
 
 function removeElectronAPI() {
-  // @ts-expect-error — intentionally deleting the optional property for testing
   delete window.electronAPI;
 }
 

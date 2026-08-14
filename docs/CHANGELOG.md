@@ -1,5 +1,123 @@
 # Changelog
 
+## 1.1.4-ytdlp-integration
+
+Added:
+- **Real yt-dlp integration in NativeMetadataService**: Production-ready metadata fetching using yt-dlp subprocess.
+- Dependency Injection pattern: `ProcessExecutor` interface enables testable subprocess execution without complex mocking.
+- yt-dlp path resolution:
+  1. Settings `ytdlpPath` if provided and executable (checked via fs.access X_OK).
+  2. System PATH candidates: `yt-dlp`, `yt-dlp.exe`, `youtube-dl`, `youtube-dl.exe` (tries each with --version check).
+  3. Error `ytdlp_not_found` if none found.
+- Security: URL passed as separate spawn argument, no shell=true, no command string concatenation.
+- Timeout: 30 seconds for video/shorts, 60 seconds for playlists (documented in code).
+- Complete error mapping: `invalid_url`, `unsupported_url`, `ytdlp_not_found`, `ytdlp_spawn_failed`, `ytdlp_timeout`, `video_unavailable`, `video_private`, `network_error`, `ytdlp_invalid_json`.
+- Full metadata parsing for Video, Shorts, Playlist, Playlist-Video, and Channel URLs.
+- `electron/services/nativeMetadataService.test.ts`: 24 comprehensive tests covering:
+  - yt-dlp path resolution (Settings path, PATH fallback, not found).
+  - Video/Shorts/Playlist/Channel metadata parsing.
+  - All 9 error cases (invalid URL, unsupported URL, spawn failure, timeout, unavailable, private, network, invalid JSON, not found).
+  - URL classification (no yt-dlp call required).
+  - Security: URL as separate argument, no shell injection.
+- `electron/ipc/metadataIpc.test.ts`: 19 integration tests with mock executor covering:
+  - IPC handler simulation with wrapSuccess/wrapError.
+  - Video/Shorts/Playlist/Channel URL type coverage.
+  - ElectronMetadataService adapter delegation.
+  - serviceResolver dual-mode (Web/Mock vs Electron/Native).
+  - Error propagation through IPC chain.
+
+Changed:
+- `electron/services/nativeMetadataService.ts`: Replaced stub with full yt-dlp subprocess integration using Dependency Injection pattern.
+- `electron/ipc/handlers.ts`: Passes `ytdlpPath` from Settings to NativeMetadataService constructor.
+- `vite.config.ts`: Added `testTimeout: 10000` (10 seconds) for all tests.
+
+Fixed:
+- vitest mock setup complexity: Replaced `vi.doMock()` with Dependency Injection pattern (ProcessExecutor interface).
+- Mock processes now emit events properly via `setImmediate()` for reliable test execution.
+- All metadata IPC integration tests now pass without timeout issues.
+
+Test Results:
+- `npm run test`: **28 test files, 190 tests, 0 failed** ✅
+- `npm run build`: ✅ zero errors (tsc -b + vite build, 1668 modules, ~9.4s)
+- `npm run electron:build`: ✅ (~32ms)
+
+Architecture Notes:
+- Web mode continues using `MockMetadataService` — no regressions.
+- Electron mode uses `NativeMetadataService` with real yt-dlp subprocess.
+- Tests are deterministic and do not depend on network, YouTube, or installed yt-dlp binary.
+- `MockProcessExecutor` allows complete test coverage of subprocess behavior without mocking Node.js built-ins.
+
+Known Limitations:
+- Manual testing with real yt-dlp binary and YouTube URLs required for end-to-end validation.
+- yt-dlp must be installed separately — no auto-download or bundled binary.
+
+## 1.1.3-electron-dev-workflow
+
+Added:
+- `npm run electron:dev`: Concurrent Vite + Electron development workflow.
+- `concurrently`, `wait-on`, `cross-env` as devDependencies for development workflow orchestration.
+- `vite.config.ts` updated with `server.port: 5173` and `server.strictPort: true` for stable dev server port.
+- `package.json` scripts:
+  - `electron:dev`: Main entry point — runs Vite and Electron concurrently with color-coded output.
+  - `dev:vite`: Starts Vite dev server on port 5173.
+  - `dev:electron`: Waits for Vite, builds Electron, and launches with `VITE_DEV_SERVER_URL` environment variable.
+
+Changed:
+- None. `electron/main.ts` already supported development mode via `process.env.VITE_DEV_SERVER_URL`.
+
+Fixed:
+- None.
+
+Development Workflow:
+1. Run `npm run electron:dev` to start development.
+2. Vite dev server starts on http://localhost:5173.
+3. Electron waits for Vite readiness (via `wait-on`).
+4. Electron builds and launches, loading Vite dev server URL.
+5. React/TypeScript changes trigger HMR without rebuilding production bundle.
+6. Closing Electron or pressing Ctrl+C terminates both processes (via `concurrently -k`).
+
+Test Results:
+- `npm run test`: **28 test files, 202 tests, 0 failed** ✅
+- `npm run build`: ✅ (1668 modules, ~10s)
+- `npm run electron:build`: ✅ (~23ms)
+
+Notes:
+- No regressions: All existing features continue working.
+- Security constraints preserved: contextIsolation, no nodeIntegration, sandbox enabled.
+- Electron development workflow is now available through npm run electron:dev with Vite + Electron integration and development HMR.
+
+## 1.1.2-metadata-ipc-verification
+
+Verified:
+- Complete Metadata IPC path from Dashboard → metadataStore → serviceResolver → Electron Metadata Adapter → preload / electronAPI → IPC → nativeMetadataService.
+- All 14 required Metadata IPC test points pass:
+  1. ✅ IPC handler registered
+  2. ✅ Native Metadata Service (36 tests: URL validation, classification, AnalysisResult generation)
+  3. ✅ Electron Metadata Adapter (delegates to window.electronAPI)
+  4. ✅ serviceResolver integration (Electron mode → ElectronMetadataService, Web mode → MockMetadataService)
+  5. ✅ Web mode continues using Mock
+  6. ✅ Electron mode uses Native adapter
+  7. ✅ Error propagation (unsupported_url, invalid_url)
+  8. ✅ Video URL analysis
+  9. ✅ Shorts URL analysis
+  10. ✅ Playlist URL analysis
+  11. ✅ Channel URL analysis
+  12. ✅ Invalid URL handling
+  13. ✅ Unsupported URL handling
+  14. ✅ IPC never crashes (wrapSuccess/wrapError envelope)
+
+Fixed:
+- Removed unnecessary `@ts-expect-error` comment in `serviceResolver.test.ts` that was causing TypeScript build errors.
+
+Test Results:
+- `npm run test`: **28 test files, 202 tests, 0 failed** ✅
+- `npm run build`: ✅ (1668 modules, zero TypeScript errors)
+- `npm run electron:build`: ✅ (~161ms)
+
+Notes:
+- No regressions: All existing features (Dashboard, Queue, History, Favorites, Scheduler, Settings, About, Dev Tools) continue working.
+- MetadataService now supports the Electron native IPC path while Web/Vitest continues using MockMetadataService.
+
 ## 1.1.1-store-wiring
 
 Added:

@@ -23,16 +23,17 @@ function wrapError<T>(err: unknown): IpcResult<T> {
 }
 
 export function registerIpcHandlers(): void {
-  const metadataService = new NativeMetadataService();
   const downloadService = new NativeDownloadService();
   const settingsService = new NativeSettingsService();
   const historyService = new NativeHistoryService();
   const favoritesService = new NativeFavoritesService();
   const schedulerService = new NativeSchedulerService();
 
-  // Metadata
+  // Metadata - creates new instance per request to use latest settings
   ipcMain.handle(IPC_CHANNELS.METADATA_ANALYZE, async (_, { url }) => {
     try {
+      const settings = await settingsService.get();
+      const metadataService = new NativeMetadataService(settings.ytdlpPath);
       const data = await metadataService.analyze(url);
       return wrapSuccess(data);
     } catch (err) {

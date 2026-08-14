@@ -45,6 +45,8 @@ ipcMain.handle (electron/ipc/handlers.ts)
       ↓
 Native Services  (electron/services/native*.ts)
       ↓
+ProcessExecutor  ← Dependency Injection for subprocess execution
+      ↓
 Node.js / yt-dlp / FFmpeg / File System
 ```
 
@@ -71,9 +73,11 @@ d:/Remon-Download/
 │   ├── ipc/
 │   │   ├── channels.ts        — IPC_CHANNELS, IpcResult<T>, typed contracts
 │   │   ├── handlers.ts        — registerIpcHandlers() via ipcMain.handle
-│   │   └── ipc.test.ts        — 27 IPC contract tests (Vitest, no Electron needed)
+│   │   ├── ipc.test.ts        — 27 IPC contract tests (Vitest, no Electron needed)
+│   │   └── metadataIpc.test.ts — 19 Metadata IPC integration tests
 │   ├── services/
-│   │   ├── nativeMetadataService.ts
+│   │   ├── nativeMetadataService.ts      — ProcessExecutor DI, yt-dlp integration, 24 tests
+│   │   ├── nativeMetadataService.test.ts — Vitest tests with MockProcessExecutor
 │   │   ├── nativeDownloadService.ts
 │   │   ├── nativeSettingsService.ts
 │   │   ├── nativeHistoryService.ts
@@ -103,10 +107,55 @@ d:/Remon-Download/
 │   └── utils/
 ├── dist/                      — Vite Renderer production build
 ├── dist-electron/             — esbuild Main Process + Preload build
+├── vite.config.ts             — Vite config (port 5173, strictPort, test setup)
 ├── tsconfig.app.json          — Renderer TypeScript (ESNext, DOM)
 ├── tsconfig.electron.json     — Main Process TypeScript (CommonJS, Node)
 └── tsconfig.node.json         — Vite config TypeScript
 ```
+
+## Development Workflow
+
+### Web Development (Browser only)
+```bash
+npm run dev
+```
+- Vite dev server on http://localhost:5173
+- Hot Module Replacement (HMR) for React/TypeScript
+- Uses Mock services (no Electron)
+
+### Electron Development (Full App)
+```bash
+npm run electron:dev
+```
+- Concurrent Vite dev server + Electron process
+- Vite runs on port 5173 (fixed with `strictPort: true`)
+- `wait-on` ensures Electron waits for Vite readiness
+- Electron loads Vite dev server URL (via `VITE_DEV_SERVER_URL` environment variable)
+- HMR works seamlessly in Electron window
+- Both processes terminate together (Ctrl+C or closing Electron)
+
+### Production Build
+```bash
+npm run build              # Build Renderer (dist/)
+npm run electron:build     # Build Main Process (dist-electron/)
+npm run electron:start     # Launch production Electron app
+```
+
+## Environment Detection (Electron Main Process)
+
+`electron/main.ts` detects development vs production mode:
+
+```ts
+const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+if (devServerUrl) {
+  mainWindow.loadURL(devServerUrl);  // Development: Load Vite dev server
+} else {
+  mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));  // Production: Load built files
+}
+```
+
+- **Development**: `VITE_DEV_SERVER_URL=http://localhost:5173` passed by `cross-env` in `electron:dev` script
+- **Production**: Environment variable not set, loads from `dist/`
 
 ## Stores
 
@@ -120,12 +169,63 @@ d:/Remon-Download/
 
 ## Services
 
-- `MetadataService`: mock YouTube URL analysis (Renderer) / yt-dlp stub (Main Process).
+- `MetadataService`: mock YouTube URL analysis (Renderer) / yt-dlp execution (Main Process).
 - `DownloadService`: creates queue items, enforces state transitions through the state machine, applies retry/failure semantics, and computes mock download progress.
 - `HistoryService`: History data access through a service interface.
 - `FavoritesService`: Favorites data access through a service interface.
 - `SchedulerService`: Scheduler data access and timing simulation through a service interface.
 - `SettingsService`: reads, validates, repairs, updates, and resets settings.
+
+## ProcessExecutor Pattern (Native Services)
+
+Native services that spawn child processes use the **Dependency Injection** pattern with a `ProcessExecutor` interface:
+
+```ts
+interface ProcessExecutor {
+  spawn(command: string, args: string[], options?: SpawnOptions): ChildProcess;
+  checkAccess(path: string, mode?: number): Promise<void>;
+}
+```
+
+### Implementations
+
+1. **DefaultProcessExecutor** (Production):
+   - Uses Node.js `child_process.spawn()` and `fs.promises.access()`.
+   - Automatically injected when service is instantiated without explicit executor.
+
+2. **MockProcessExecutor** (Testing):
+   - Configurable test double with `setSpawnBehavior()` and `setAccessBehavior()`.
+   - Emits stdout/stderr/exit events asynchronously using `setImmediate()`.
+   - Enables deterministic testing without network or installed binaries.
+
+### Why Not vi.mock()?
+
+Vitest's `vi.mock("child_process")` had complex hoisting issues:
+- Module hoisting conflicts with per-test behavior configuration.
+- `vi.doMock()` failed with "No default export" errors.
+- Hard to simulate different subprocess behaviors per test.
+
+The ProcessExecutor interface provides:
+- Clean separation of concerns.
+- Type-safe dependency injection.
+- Full control over subprocess behavior in tests.
+- Zero network dependency in test suite.
+
+### Usage Example
+
+```ts
+// Production (automatic)
+const service = new NativeMetadataService(settingsService);
+
+// Testing (explicit injection)
+const mockExecutor = new MockProcessExecutor();
+mockExecutor.setSpawnBehavior({
+  stdout: '{"title": "Test Video"}',
+  stderr: '',
+  exitCode: 0
+});
+const service = new NativeMetadataService(settingsService, mockExecutor);
+```
 
 ## IPC Channel Registry (`electron/ipc/channels.ts`)
 

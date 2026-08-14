@@ -27,9 +27,10 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { EventEmitter } from "events";
 import { IPC_CHANNELS } from "../ipc/channels";
 import type { IpcResult } from "../ipc/channels";
-import { NativeMetadataService } from "../services/nativeMetadataService";
+import { NativeMetadataService, type ProcessExecutor } from "../services/nativeMetadataService";
 import { ElectronMetadataService } from "../../src/services/electronIpcAdapters";
 import {
   resolveMetadataService,
@@ -38,7 +39,132 @@ import {
 import { MockMetadataService } from "../../src/services/metadataService";
 import type { AnalysisResult, VideoMetadata, PlaylistMetadata, ChannelMetadata } from "../../src/types/download";
 
-// ─── Shared helpers (mirrors handlers.ts logic) ──────────────────────────────
+// ─── Mock Process Executor (same as in nativeMetadataService.test.ts) ───────
+
+class MockChildProcess extends EventEmitter {
+  stdout = new EventEmitter();
+  stderr = new EventEmitter();
+  killed = false;
+
+  kill(): boolean {
+    this.killed = true;
+    this.emit("exit", null);
+    return true;
+  }
+}
+
+class MockProcessExecutor implements ProcessExecutor {
+  private spawnBehavior: ((command: string, args: string[]) => any) | null = null;
+  private accessBehavior: ((path: string, mode: number) => Promise<void>) | null = null;
+
+  setSpawnBehavior(fn: (command: string, args: string[]) => any) {
+    this.spawnBehavior = fn;
+  }
+
+  setAccessBehavior(fn: (path: string, mode: number) => Promise<void>) {
+    this.accessBehavior = fn;
+  }
+
+  spawn(command: string, args: string[], options?: any): any {
+    if (this.spawnBehavior) {
+      return this.spawnBehavior(command, args);
+    }
+    return new MockChildProcess();
+  }
+
+  async checkAccess(path: string, mode: number): Promise<void> {
+    if (this.accessBehavior) {
+      return this.accessBehavior(path, mode);
+    }
+    throw new Error("ENOENT");
+  }
+}
+
+function createSuccessProcess(jsonOutput: string): MockChildProcess {
+  const proc = new MockChildProcess();
+  setImmediate(() => {
+    proc.stdout.emit("data", Buffer.from(jsonOutput));
+    proc.emit("exit", 0);
+  });
+  return proc;
+}
+
+// ─── Test Fixtures ────────────────────────────────────────────────────────────
+
+const SAMPLE_VIDEO_JSON = JSON.stringify({
+  id: "dQw4w9WgXcQ",
+  webpage_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  title: "Test Video",
+  uploader: "Test Channel",
+  duration: 300,
+  view_count: 1000,
+  thumbnail: "https://example.com/thumb.jpg",
+  upload_date: "20260101",
+  formats: [{ ext: "mp4", height: 1080, fps: 30, vcodec: "avc1", acodec: "mp4a", tbr: 5000, abr: 192, filesize: 100000 }]
+});
+
+const SAMPLE_SHORTS_JSON = JSON.stringify({
+  id: "abc123",
+  webpage_url: "https://www.youtube.com/shorts/abc123",
+  title: "Test Shorts",
+  uploader: "Test Channel",
+  duration: 45,
+  view_count: 500,
+  thumbnail: "https://example.com/shorts.jpg",
+  upload_date: "20260101",
+  formats: [{ ext: "mp4", height: 1080, fps: 60, vcodec: "avc1", acodec: "mp4a", tbr: 2000, abr: 192, filesize: 5000 }]
+});
+
+const SAMPLE_PLAYLIST_JSON = JSON.stringify({
+  id: "PLxxxxxx",
+  webpage_url: "https://www.youtube.com/playlist?list=PLxxxxxx",
+  title: "Test Playlist",
+  thumbnail: "https://example.com/playlist.jpg",
+  entries: [
+    {
+      id: "video1",
+      webpage_url: "https://www.youtube.com/watch?v=video1",
+      title: "Video 1",
+      uploader: "Channel",
+      duration: 100,
+      view_count: 1000,
+      thumbnail: "https://example.com/v1.jpg",
+      upload_date: "20260101",
+      formats: [{ ext: "mp4", height: 720, fps: 30, vcodec: "avc1", acodec: "mp4a", tbr: 1000, abr: 128, filesize: 10000 }]
+    }
+  ]
+});
+
+const SAMPLE_CHANNEL_JSON = JSON.stringify({
+  id: "UCxxxxxx",
+  webpage_url: "https://www.youtube.com/@ExampleChannel",
+  title: "Test Channel",
+  thumbnail: "https://example.com/channel.jpg",
+  entries: [
+    {
+      id: "latest1",
+      webpage_url: "https://www.youtube.com/watch?v=latest1",
+      title: "Latest Video",
+      uploader: "Test Channel",
+      duration: 200,
+      view_count: 2000,
+      thumbnail: "https://example.com/latest.jpg",
+      upload_date: "20260110",
+      formats: [{ ext: "mp4", height: 1080, fps: 30, vcodec: "avc1", acodec: "mp4a", tbr: 2000, abr: 192, filesize: 50000 }]
+    }
+  ]
+});
+
+const URLS = {
+  video: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  shorts: "https://www.youtube.com/shorts/abc123",
+  playlist: "https://www.youtube.com/playlist?list=PLxxxxxx",
+  channel: "https://www.youtube.com/@ExampleChannel",
+  unsupported: "https://vimeo.com/123456",
+  invalid: "not-a-url"
+};
+
+// ─── Shared helpers ──────────────────────────────────────────────────────────
 
 function wrapSuccess<T>(data: T): IpcResult<T> {
   return { success: true, data };
@@ -49,8 +175,40 @@ function wrapError<T>(err: unknown): IpcResult<T> {
   return { success: false, error: { code: "unknown", message, recoverable: true } };
 }
 
-async function simulateHandler(url: string): Promise<IpcResult<AnalysisResult>> {
-  const service = new NativeMetadataService();
+function createMockExecutor(responseMap: Record<string, string>): MockProcessExecutor {
+  const executor = new MockProcessExecutor();
+
+  executor.setAccessBehavior(async () => {
+    throw new Error("ENOENT"); // Force PATH lookup
+  });
+
+  executor.setSpawnBehavior((cmd, args) => {
+    if (args[0] === "--version") {
+      return createSuccessProcess("2024.01.01");
+    }
+
+    // Find URL in args
+    const url = args.find(arg => arg.startsWith("http"));
+    if (url && responseMap[url]) {
+      return createSuccessProcess(responseMap[url]);
+    }
+
+    // Default error
+    const proc = new MockChildProcess();
+    setImmediate(() => {
+      proc.stderr.emit("data", Buffer.from("ERROR: Video unavailable"));
+      proc.emit("exit", 1);
+    });
+    return proc;
+  });
+
+  return executor;
+}
+
+async function simulateHandler(url: string, responseMap: Record<string, string>): Promise<IpcResult<AnalysisResult>> {
+  const executor = createMockExecutor(responseMap);
+  const service = new NativeMetadataService(undefined, executor);
+
   try {
     const data = await service.analyze(url);
     return wrapSuccess(data);
@@ -58,17 +216,6 @@ async function simulateHandler(url: string): Promise<IpcResult<AnalysisResult>> 
     return wrapError(err);
   }
 }
-
-// ─── Test URL fixtures ────────────────────────────────────────────────────────
-
-const URLS = {
-  video: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-  shorts: "https://www.youtube.com/shorts/abc123",
-  playlist: "https://www.youtube.com/playlist?list=PLxxxxxx",
-  channel: "https://www.youtube.com/@ExampleChannel",
-  unsupported: "https://vimeo.com/123456",
-  invalid: "not-a-url"
-};
 
 // ─── 1. Metadata IPC channel ─────────────────────────────────────────────────
 
@@ -91,8 +238,12 @@ describe("Metadata IPC channel", () => {
 // ─── 2-4. IPC handler simulation ─────────────────────────────────────────────
 
 describe("IPC handler simulation — metadata:analyze", () => {
+  const responseMap = {
+    [URLS.video]: SAMPLE_VIDEO_JSON
+  };
+
   it("returns IpcResult { success: true } for a valid video URL", async () => {
-    const result = await simulateHandler(URLS.video);
+    const result = await simulateHandler(URLS.video, responseMap);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.linkType).toBe("video");
@@ -100,7 +251,7 @@ describe("IPC handler simulation — metadata:analyze", () => {
   });
 
   it("returns IpcResult { success: false } for an unsupported URL — does not crash", async () => {
-    const result = await simulateHandler(URLS.unsupported);
+    const result = await simulateHandler(URLS.unsupported, {});
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.message).toBe("unsupported_url");
@@ -108,7 +259,7 @@ describe("IPC handler simulation — metadata:analyze", () => {
   });
 
   it("returns IpcResult { success: false } for an invalid URL — does not crash", async () => {
-    const result = await simulateHandler(URLS.invalid);
+    const result = await simulateHandler(URLS.invalid, {});
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.message).toBe("invalid_url");
@@ -116,9 +267,8 @@ describe("IPC handler simulation — metadata:analyze", () => {
   });
 
   it("Main Process never throws — errors are always wrapped in IpcResult", async () => {
-    // Simulate what the handler does: even a completely broken input must not throw
-    await expect(simulateHandler("")).resolves.toMatchObject({ success: false });
-    await expect(simulateHandler(URLS.unsupported)).resolves.toMatchObject({ success: false });
+    await expect(simulateHandler("", {})).resolves.toMatchObject({ success: false });
+    await expect(simulateHandler(URLS.unsupported, {})).resolves.toMatchObject({ success: false });
   });
 });
 
@@ -126,7 +276,9 @@ describe("IPC handler simulation — metadata:analyze", () => {
 
 describe("IPC handler — URL type coverage", () => {
   it("Video URL → IpcResult<VideoMetadata> with linkType 'video'", async () => {
-    const result = await simulateHandler(URLS.video);
+    const responseMap = { [URLS.video]: SAMPLE_VIDEO_JSON };
+    const result = await simulateHandler(URLS.video, responseMap);
+
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.linkType).toBe("video");
@@ -136,7 +288,9 @@ describe("IPC handler — URL type coverage", () => {
   });
 
   it("Shorts URL → IpcResult<VideoMetadata> with linkType 'shorts'", async () => {
-    const result = await simulateHandler(URLS.shorts);
+    const responseMap = { [URLS.shorts]: SAMPLE_SHORTS_JSON };
+    const result = await simulateHandler(URLS.shorts, responseMap);
+
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.linkType).toBe("shorts");
@@ -144,7 +298,9 @@ describe("IPC handler — URL type coverage", () => {
   });
 
   it("Playlist URL → IpcResult<PlaylistMetadata> with linkType 'playlist'", async () => {
-    const result = await simulateHandler(URLS.playlist);
+    const responseMap = { [URLS.playlist]: SAMPLE_PLAYLIST_JSON };
+    const result = await simulateHandler(URLS.playlist, responseMap);
+
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.linkType).toBe("playlist");
@@ -154,7 +310,9 @@ describe("IPC handler — URL type coverage", () => {
   });
 
   it("Channel URL → IpcResult<ChannelMetadata> with linkType 'channel'", async () => {
-    const result = await simulateHandler(URLS.channel);
+    const responseMap = { [URLS.channel]: SAMPLE_CHANNEL_JSON };
+    const result = await simulateHandler(URLS.channel, responseMap);
+
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.linkType).toBe("channel");
@@ -164,7 +322,7 @@ describe("IPC handler — URL type coverage", () => {
   });
 
   it("Invalid URL → IpcResult error with message 'invalid_url'", async () => {
-    const result = await simulateHandler(URLS.invalid);
+    const result = await simulateHandler(URLS.invalid, {});
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.message).toBe("invalid_url");
@@ -173,7 +331,7 @@ describe("IPC handler — URL type coverage", () => {
   });
 
   it("Unsupported URL → IpcResult error with message 'unsupported_url'", async () => {
-    const result = await simulateHandler(URLS.unsupported);
+    const result = await simulateHandler(URLS.unsupported, {});
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.message).toBe("unsupported_url");
@@ -186,7 +344,6 @@ describe("IPC handler — URL type coverage", () => {
 
 describe("ElectronMetadataService adapter", () => {
   beforeEach(() => {
-    // Remove any stale electronAPI
     delete (window as Record<string, unknown>).electronAPI;
   });
 
@@ -214,7 +371,6 @@ describe("ElectronMetadataService adapter", () => {
       uploadDate: "2026-01-01"
     } satisfies VideoMetadata);
 
-    // Inject fake electronAPI
     (window as Record<string, unknown>).electronAPI = {
       isElectron: true,
       metadata: { analyze: mockAnalyze },
@@ -285,8 +441,9 @@ describe("serviceResolver — metadata dual-mode", () => {
 
 describe("Error propagation — store error flow", () => {
   it("wrapError from NativeMetadataService → IpcResult error → adapter throws → store catches", async () => {
-    // Step 1: NativeMetadataService throws
-    const nativeSvc = new NativeMetadataService();
+    // Step 1: NativeMetadataService throws (with mock executor)
+    const executor = createMockExecutor({});
+    const nativeSvc = new NativeMetadataService(undefined, executor);
     let nativeError: Error | null = null;
     try {
       await nativeSvc.analyze(URLS.unsupported);
@@ -296,14 +453,13 @@ describe("Error propagation — store error flow", () => {
     expect(nativeError?.message).toBe("unsupported_url");
 
     // Step 2: handler wraps to IpcResult
-    const ipcResult = await simulateHandler(URLS.unsupported);
+    const ipcResult = await simulateHandler(URLS.unsupported, {});
     expect(ipcResult.success).toBe(false);
     if (!ipcResult.success) {
       expect(ipcResult.error.message).toBe("unsupported_url");
     }
 
-    // Step 3: preload invoke() unwraps and throws → adapter propagates it
-    // This is simulated by the adapter test above; here we confirm the chain is complete.
+    // Step 3: Confirm error chain
     expect(nativeError?.message).toBe("unsupported_url");
   });
 });
