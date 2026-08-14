@@ -41,16 +41,34 @@ src/
 ## Stores
 
 - `metadataStore`: manages current Dashboard analysis state.
-- `queueStore`: session-only queue items.
+- `queueStore`: session-only queue items, ordering, lifecycle controls, mock errors, concurrency slots, and simulation ticks.
 - `settingsStore`: localStorage-backed settings and document language/theme application.
-- `historyStore`, `favoritesStore`, `schedulerStore`: placeholders for upcoming features.
+- `historyStore`: session-only History items, loading/error state, remove/clear behavior, Re-download back into Queue, and Open Folder prototype simulation.
+- `favoritesStore`, `schedulerStore`: placeholders for upcoming features.
 - `devToolsStore`: development-only state foundation.
 
 ## Services
 
 - `MetadataService`: mock YouTube URL analysis.
-- `DownloadService`: creates session-only queue items from metadata.
+- `DownloadService`: creates queue items, enforces state transitions through the state machine, applies retry/failure semantics, and computes mock download progress.
+- `HistoryService`: mock session-only History data access through a service interface.
 - `SettingsService`: reads, validates, repairs, updates, and resets localStorage settings.
+
+## Download Queue
+
+- State machine logic lives in `src/utils/stateMachine.ts`.
+- Mock speed and ETA helpers live in `src/utils/downloadSimulation.ts`.
+- `QueuePage` uses `@dnd-kit/core` and `@dnd-kit/sortable` for mouse and keyboard reordering.
+- Queue lifecycle is driven by a UI interval calling `queueStore.tick()`.
+- Speed limit and concurrent download values come from `settingsStore`.
+
+## History
+
+- `HistoryPage` reads from `historyStore`; it does not call services directly.
+- `QueueHistoryBridge` records Queue items in History once they reach `completed`, `failed`, or `canceled`.
+- History stores `HistoryItem` records, not duplicate live `DownloadItem` state.
+- Re-download creates a new queued `DownloadItem` through `queueStore.addFromHistoryItem`.
+- Open Folder is a prototype toast only, with no filesystem, shell, Electron, or native OS access.
 
 ## Electron Readiness
 
