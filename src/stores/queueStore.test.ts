@@ -1,6 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VideoMetadata } from "../types/download";
-import { useQueueStore } from "./queueStore";
 
 const metadata: VideoMetadata = {
   id: "video-1",
@@ -25,9 +24,67 @@ const metadata: VideoMetadata = {
   uploadDate: "2026-08-01"
 };
 
+let useQueueStore: any;
+
+beforeEach(async () => {
+  vi.resetModules();
+  const serviceResolver = await import("../services/serviceResolver");
+  const queueStoreModule = await import("./queueStore");
+  useQueueStore = queueStoreModule.useQueueStore;
+  serviceResolver._resetServiceCache();
+  useQueueStore.getState().clear();
+});
+
 describe("useQueueStore", () => {
-  beforeEach(() => {
-    useQueueStore.getState().clear();
+  it("propagates progress updates from the download service to the queue store", async () => {
+    vi.resetModules();
+    const serviceResolver = await import("../services/serviceResolver");
+    let onItemUpdate: ((id: string, item: any) => void) | undefined;
+
+    serviceResolver._injectDownloadService({
+      createFromMetadata: (m: VideoMetadata, order: number, quality: string, format: string) => ({
+        id: crypto.randomUUID(),
+        metadataId: m.id,
+        thumbnail: m.thumbnail,
+        title: m.title,
+        sourceUrl: m.sourceUrl,
+        quality,
+        format,
+        fileSize: m.fileSize,
+        downloadedSize: 0,
+        speed: 0,
+        eta: "--",
+        progress: 0,
+        status: "queued",
+        order,
+        addedAt: new Date().toISOString(),
+        phaseStartedAt: Date.now(),
+        lastUpdatedAt: Date.now(),
+        retryCount: 0
+      }),
+      createFromHistoryItem: vi.fn(),
+      createFromFavoriteItem: vi.fn(),
+      transition: vi.fn((item) => item),
+      retry: vi.fn((item) => ({ ...item, status: "retrying", progress: 0, downloadedSize: 0, speed: 0, eta: "--" })),
+      fail: vi.fn((item) => item),
+      tick: vi.fn((item) => item),
+      onItemUpdate: (callback: (id: string, item: any) => void) => {
+        onItemUpdate = callback;
+        return () => { onItemUpdate = undefined; };
+      }
+    } as any);
+
+    const queueStoreModule = await import("./queueStore");
+    const queueStore = queueStoreModule.useQueueStore;
+    const item = queueStore.getState().addFromMetadata(metadata, "1080p", "mp4");
+
+    const updateHandler = onItemUpdate;
+    if (typeof updateHandler === "function") {
+      updateHandler(item.id, { ...item, status: "downloading", progress: 42, downloadedSize: 512, speed: 1024, eta: "00:05" });
+    }
+
+    expect(queueStore.getState().items[0]?.progress).toBe(42);
+    expect(queueStore.getState().items[0]?.status).toBe("downloading");
   });
 
   it("adds metadata to the queue without starting download", () => {
@@ -67,10 +124,10 @@ describe("useQueueStore", () => {
     );
 
     useQueueStore.getState().tick(2, "unlimited", 1000);
-    const statuses = useQueueStore.getState().items.map((item) => item.status);
+    const statuses = useQueueStore.getState().items.map((item: any) => item.status);
 
-    expect(statuses.filter((status) => status === "analyzing")).toHaveLength(2);
-    expect(statuses.filter((status) => status === "queued")).toHaveLength(1);
+    expect(statuses.filter((status: any) => status === "analyzing")).toHaveLength(2);
+    expect(statuses.filter((status: any) => status === "queued")).toHaveLength(1);
   });
 
   it("pauses, resumes, cancels, retries, and removes items", () => {

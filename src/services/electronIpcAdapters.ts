@@ -59,21 +59,28 @@ export class ElectronDownloadService implements DownloadService {
     // Subscribe to IPC progress events
     this.progressUnsubscribe = window.electronAPI!.download.onProgress((payload: DownloadProgressPayload) => {
       const item = this.itemsCache.get(payload.id);
-      if (item) {
-        const updated = {
-          ...item,
-          progress: payload.progress,
-          downloadedSize: payload.downloadedSize,
-          fileSize: payload.totalSize || item.fileSize,
-          speed: payload.speed,
-          eta: payload.eta,
-          lastUpdatedAt: Date.now()
-        };
-        this.itemsCache.set(payload.id, updated);
-
-        // Notify subscribers of the update
-        this.notifyUpdate(payload.id, updated);
+      if (!item) {
+        return;
       }
+
+      const nonLiveStatuses: DownloadStatus[] = ["paused", "canceled", "failed", "completed"];
+      if (nonLiveStatuses.includes(item.status)) {
+        return;
+      }
+
+      const updated = {
+        ...item,
+        progress: payload.progress,
+        downloadedSize: payload.downloadedSize,
+        fileSize: payload.totalSize || item.fileSize,
+        speed: payload.speed,
+        eta: payload.eta,
+        lastUpdatedAt: Date.now()
+      };
+      this.itemsCache.set(payload.id, updated);
+
+      // Notify subscribers of the update
+      this.notifyUpdate(payload.id, updated);
     });
 
     // Subscribe to IPC state change events
@@ -88,6 +95,11 @@ export class ElectronDownloadService implements DownloadService {
           lastUpdatedAt: Date.now()
         };
         this.itemsCache.set(payload.id, updated);
+
+        if (["paused", "canceled", "failed", "completed"].includes(payload.status)) {
+          updated.speed = 0;
+          updated.eta = "--";
+        }
 
         // Notify subscribers of the update
         this.notifyUpdate(payload.id, updated);

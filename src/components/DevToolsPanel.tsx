@@ -28,7 +28,7 @@ function createDevToolsVideo(index: number): VideoMetadata {
     views: 42000 + index * 1000,
     qualityOptions: ["2160p", "1440p", "1080p", "720p"],
     videoFormats: ["mp4", "webm", "mkv"],
-    audioFormats: ["m4a", "mp3", "opus"],
+    audioFormats: ["mp3", "opus"],
     resolution: "1080p",
     fps: 60,
     videoCodec: "H.264",

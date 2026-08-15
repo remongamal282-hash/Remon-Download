@@ -16,6 +16,10 @@ export const IPC_CHANNELS = {
   SETTINGS_GET: "settings:get",
   SETTINGS_UPDATE: "settings:update",
   SETTINGS_RESET: "settings:reset",
+  SETTINGS_SELECT_DOWNLOAD_FOLDER: "settings:select-download-folder",
+  WINDOW_MINIMIZE: "window:minimize",
+  WINDOW_CLOSE: "window:close",
+  DOWNLOAD_OPEN_FOLDER: "download:open-folder",
   HISTORY_GET_ALL: "history:get-all",
   HISTORY_ADD: "history:add",
   HISTORY_REMOVE: "history:remove",
@@ -60,6 +64,10 @@ export interface IpcContractPayloads {
   [IPC_CHANNELS.SETTINGS_GET]: void;
   [IPC_CHANNELS.SETTINGS_UPDATE]: { settings: Partial<AppSettings> };
   [IPC_CHANNELS.SETTINGS_RESET]: void;
+  [IPC_CHANNELS.SETTINGS_SELECT_DOWNLOAD_FOLDER]: void;
+  [IPC_CHANNELS.WINDOW_MINIMIZE]: void;
+  [IPC_CHANNELS.WINDOW_CLOSE]: void;
+  [IPC_CHANNELS.DOWNLOAD_OPEN_FOLDER]: { path: string };
   [IPC_CHANNELS.HISTORY_GET_ALL]: void;
   [IPC_CHANNELS.HISTORY_ADD]: { item: HistoryItem };
   [IPC_CHANNELS.HISTORY_REMOVE]: { id: string };
@@ -88,6 +96,10 @@ export interface IpcContractResponses {
   [IPC_CHANNELS.SETTINGS_GET]: AppSettings;
   [IPC_CHANNELS.SETTINGS_UPDATE]: AppSettings;
   [IPC_CHANNELS.SETTINGS_RESET]: AppSettings;
+  [IPC_CHANNELS.SETTINGS_SELECT_DOWNLOAD_FOLDER]: string | null;
+  [IPC_CHANNELS.WINDOW_MINIMIZE]: void;
+  [IPC_CHANNELS.WINDOW_CLOSE]: void;
+  [IPC_CHANNELS.DOWNLOAD_OPEN_FOLDER]: void;
   [IPC_CHANNELS.HISTORY_GET_ALL]: HistoryItem[];
   [IPC_CHANNELS.HISTORY_ADD]: HistoryItem;
   [IPC_CHANNELS.HISTORY_REMOVE]: string;

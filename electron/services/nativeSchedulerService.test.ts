@@ -99,9 +99,11 @@ describe('NativeSchedulerService', () => {
     it('should normalize items with unknown status to "scheduled"', async () => {
       mockReadJsonFile.mockResolvedValue({
         version: '1.0.0',
-        data: [{ id: 'sched-bad', sourceUrl: 'https://x.com', date: '2024-01-01', time: '10:00',
+        data: [{
+          id: 'sched-bad', sourceUrl: 'https://x.com', date: '2024-01-01', time: '10:00',
           repeat: 'once', status: 'INVALID_STATUS', nextRunAt: '2024-01-01T10:00:00Z',
-          createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z', triggerCount: 0 }],
+          createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z', triggerCount: 0
+        }],
       });
 
       const newService = new NativeSchedulerService();
@@ -218,6 +220,20 @@ describe('NativeSchedulerService', () => {
       });
 
       expect(mockWriteJsonFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('should trigger due scheduled downloads automatically', async () => {
+      const dueAt = new Date(Date.now() - 60_000).toISOString();
+      const item = makeItem({ id: 'sched-trigger', nextRunAt: dueAt, repeat: 'once', status: 'scheduled' });
+      mockReadJsonFile.mockResolvedValue({ version: '1.0.0', data: [item] });
+      await service.initialize();
+
+      const result = await service.tick(Date.now());
+
+      expect(result.triggered).toHaveLength(1);
+      expect(result.triggered[0].schedule.status).toBe('triggered');
+      expect(result.items[0].status).toBe('triggered');
+      expect(result.items[0].triggerCount).toBe(1);
     });
   });
 

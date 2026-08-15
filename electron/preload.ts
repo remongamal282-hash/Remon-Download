@@ -60,14 +60,22 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on(IPC_EVENTS.DOWNLOAD_STATE_CHANGE, listener);
       // Return unsubscribe function
       return () => ipcRenderer.removeListener(IPC_EVENTS.DOWNLOAD_STATE_CHANGE, listener);
-    }
+    },
+
+    openFolder: (path: string): Promise<void> => invoke(IPC_CHANNELS.DOWNLOAD_OPEN_FOLDER, { path })
   },
 
   settings: {
     get: (): Promise<AppSettings> => invoke(IPC_CHANNELS.SETTINGS_GET),
     update: (settings: Partial<AppSettings>): Promise<AppSettings> =>
       invoke(IPC_CHANNELS.SETTINGS_UPDATE, { settings }),
-    reset: (): Promise<AppSettings> => invoke(IPC_CHANNELS.SETTINGS_RESET)
+    reset: (): Promise<AppSettings> => invoke(IPC_CHANNELS.SETTINGS_RESET),
+    selectDownloadFolder: (): Promise<string | null> => invoke(IPC_CHANNELS.SETTINGS_SELECT_DOWNLOAD_FOLDER)
+  },
+
+  window: {
+    minimize: (): Promise<void> => invoke(IPC_CHANNELS.WINDOW_MINIMIZE),
+    close: (): Promise<void> => invoke(IPC_CHANNELS.WINDOW_CLOSE)
   },
 
   history: {

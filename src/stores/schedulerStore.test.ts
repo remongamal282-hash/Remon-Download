@@ -34,7 +34,7 @@ describe("useSchedulerStore", () => {
     expect(useQueueStore.getState().items[0]).toMatchObject({
       sourceUrl: scheduleInput.sourceUrl,
       status: "queued",
-      quality: "1080p",
+      quality: "720p",
       format: "mp4"
     });
     expect(useSchedulerStore.getState().items[0]).toMatchObject({

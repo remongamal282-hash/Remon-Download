@@ -24,6 +24,14 @@ export function applyDocumentPreferences(settings: AppSettings): void {
 
 const settingsService = resolveSettingsService();
 
+function getElectronSettingsApi() {
+  if (typeof window === "undefined" || !window.electronAPI?.settings) {
+    return null;
+  }
+
+  return window.electronAPI.settings;
+}
+
 export const useSettingsStore = create<SettingsState>((set) => ({
   settings: DEFAULT_SETTINGS,
   isLoading: false,
@@ -31,21 +39,12 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   loadSettings: async () => {
     set({ isLoading: true });
     try {
-      // Check if running in Electron environment
-      if (typeof window !== 'undefined' && window.electronAPI) {
-        // Electron mode - use async IPC
-        const settings = await (settingsService as any).getAsync();
-        applyDocumentPreferences(settings);
-        set({ settings, isLoading: false });
-      } else {
-        // Browser mode - use sync LocalStorage
-        const settings = settingsService.get();
-        applyDocumentPreferences(settings);
-        set({ settings, isLoading: false });
-      }
+      const electronSettings = getElectronSettingsApi();
+      const settings = electronSettings ? await electronSettings.get() : settingsService.get();
+      applyDocumentPreferences(settings);
+      set({ settings, isLoading: false });
     } catch (error) {
       console.error('[settingsStore] Failed to load settings:', error);
-      // Fallback to defaults
       applyDocumentPreferences(DEFAULT_SETTINGS);
       set({ settings: DEFAULT_SETTINGS, isLoading: false });
     }
@@ -53,18 +52,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
 
   updateSettings: async (patch) => {
     try {
-      // Check if running in Electron environment
-      if (typeof window !== 'undefined' && window.electronAPI) {
-        // Electron mode - use async IPC
-        const nextSettings = await (settingsService as any).updateAsync(patch);
-        applyDocumentPreferences(nextSettings);
-        set({ settings: nextSettings });
-      } else {
-        // Browser mode - use sync LocalStorage
-        const nextSettings = settingsService.update(patch);
-        applyDocumentPreferences(nextSettings);
-        set({ settings: nextSettings });
-      }
+      const electronSettings = getElectronSettingsApi();
+      const nextSettings = electronSettings ? await electronSettings.update(patch) : settingsService.update(patch);
+      applyDocumentPreferences(nextSettings);
+      set({ settings: nextSettings });
     } catch (error) {
       console.error('[settingsStore] Failed to update settings:', error);
     }
@@ -72,18 +63,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
 
   resetSettings: async () => {
     try {
-      // Check if running in Electron environment
-      if (typeof window !== 'undefined' && window.electronAPI) {
-        // Electron mode - use async IPC
-        const nextSettings = await (settingsService as any).resetAsync();
-        applyDocumentPreferences(nextSettings);
-        set({ settings: nextSettings });
-      } else {
-        // Browser mode - use sync LocalStorage
-        const nextSettings = settingsService.reset();
-        applyDocumentPreferences(nextSettings);
-        set({ settings: nextSettings });
-      }
+      const electronSettings = getElectronSettingsApi();
+      const nextSettings = electronSettings ? await electronSettings.reset() : settingsService.reset();
+      applyDocumentPreferences(nextSettings);
+      set({ settings: nextSettings });
     } catch (error) {
       console.error('[settingsStore] Failed to reset settings:', error);
     }

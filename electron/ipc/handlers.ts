@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow } from "electron";
+import { app, ipcMain, BrowserWindow, dialog, shell } from "electron";
 import { IPC_CHANNELS, IPC_EVENTS, type IpcResult, type DownloadProgressPayload, type DownloadStateChangePayload } from "./channels";
 import { NativeMetadataService } from "../services/nativeMetadataService";
 import { NativeDownloadService } from "../services/nativeDownloadService";
@@ -239,6 +239,76 @@ export function registerIpcHandlers(): void {
         downloadService.updateSettings(data);
       }
       return wrapSuccess(data);
+    } catch (err) {
+      return wrapError(err);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, async () => {
+    const focusedWindow = BrowserWindow.getFocusedWindow();
+    if (focusedWindow) {
+      focusedWindow.minimize();
+    }
+    return wrapSuccess(undefined);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.WINDOW_CLOSE, async () => {
+    const focusedWindow = BrowserWindow.getFocusedWindow();
+    if (focusedWindow) {
+      focusedWindow.close();
+    }
+    return wrapSuccess(undefined);
+  });
+
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_SELECT_DOWNLOAD_FOLDER, async () => {
+    try {
+      const focusedWindow = BrowserWindow.getFocusedWindow();
+      const result = await dialog.showOpenDialog(focusedWindow || new BrowserWindow(), {
+        properties: ["openDirectory"]
+      });
+
+      if (result.canceled || result.filePaths.length === 0) {
+        return wrapSuccess(null);
+      }
+
+      const folderPath = result.filePaths[0];
+      // Update settings with the new download folder
+      const updatedSettings = await settingsService.update({ downloadFolder: folderPath });
+      if (downloadService) {
+        downloadService.updateSettings(updatedSettings);
+      }
+
+      return wrapSuccess(folderPath);
+    } catch (err) {
+      return wrapError(err);
+    }
+  });
+
+  function resolveDownloadFolderPath(folderPath: string): string {
+    if (!folderPath || folderPath.trim() === "") {
+      return app.getPath("downloads");
+    }
+
+    if (folderPath === "~") {
+      return app.getPath("home");
+    }
+
+    if (folderPath.startsWith("~/")) {
+      return `${app.getPath("home")}${folderPath.slice(1)}`;
+    }
+
+    if (folderPath.startsWith("~\\")) {
+      return `${app.getPath("home")}${folderPath.slice(1)}`;
+    }
+
+    return folderPath;
+  }
+
+  ipcMain.handle(IPC_CHANNELS.DOWNLOAD_OPEN_FOLDER, async (_, { path }) => {
+    try {
+      const folderPath = resolveDownloadFolderPath(path ?? "");
+      await shell.openPath(folderPath);
+      return wrapSuccess(undefined);
     } catch (err) {
       return wrapError(err);
     }

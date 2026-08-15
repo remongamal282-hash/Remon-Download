@@ -1,9 +1,8 @@
-import { Download, Heart, History, Home, Info, ListVideo, Settings, Timer } from "lucide-react";
+import { Download, Heart, History, Home, Info, ListVideo, Minus, Settings, Timer, X } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ROUTES } from "../constants/routes";
 import { DevToolsPanel } from "../components/DevToolsPanel";
-import { useQueueStore } from "../stores/queueStore";
 
 const navItems = [
   { to: ROUTES.dashboard, labelKey: "nav.dashboard", icon: Home },
@@ -17,18 +16,25 @@ const navItems = [
 
 export function AppLayout() {
   const { t } = useTranslation();
-  const queueCount = useQueueStore((state) => state.items.length);
+
+  async function minimizeWindow() {
+    if (typeof window !== "undefined" && window.electronAPI?.window?.minimize) {
+      await window.electronAPI.window.minimize();
+    }
+  }
+
+  async function closeWindow() {
+    if (typeof window !== "undefined" && window.electronAPI?.window?.close) {
+      await window.electronAPI.window.close();
+    }
+  }
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-950 dark:bg-slate-950 dark:text-slate-50">
       <aside className="flex w-64 shrink-0 flex-col border-e border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex h-16 items-center gap-3 border-b border-slate-200 px-5 dark:border-slate-800">
+        <div className="flex h-16 items-center justify-center border-b border-slate-200 px-5 dark:border-slate-800">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-600 text-white">
             <Download aria-hidden="true" size={22} />
-          </div>
-          <div>
-            <p className="text-sm font-semibold">{t("app.name")}</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400">Prototype</p>
           </div>
         </div>
         <nav className="flex flex-1 flex-col gap-1 p-3" aria-label="Primary">
@@ -55,15 +61,23 @@ export function AppLayout() {
         </nav>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-6 dark:border-slate-800 dark:bg-slate-900">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
-              {t("app.name")}
-            </p>
-            <p className="text-sm text-slate-600 dark:text-slate-300">
-              {t("dashboard.queueCount", { count: queueCount })}
-            </p>
-          </div>
+        <header className="flex h-16 items-center justify-end gap-2 border-b border-slate-200 bg-white px-4 dark:border-slate-800 dark:bg-slate-900">
+          <button
+            type="button"
+            aria-label="Minimize"
+            onClick={minimizeWindow}
+            className="flex h-8 w-8 items-center justify-center rounded-md text-slate-600 transition hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+          >
+            <Minus aria-hidden="true" size={16} />
+          </button>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={closeWindow}
+            className="flex h-8 w-8 items-center justify-center rounded-md text-slate-600 transition hover:bg-red-100 hover:text-red-600 dark:text-slate-300 dark:hover:bg-red-500/10 dark:hover:text-red-400"
+          >
+            <X aria-hidden="true" size={16} />
+          </button>
         </header>
         <main className="min-w-0 flex-1 p-6">
           <Outlet />

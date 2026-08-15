@@ -51,6 +51,7 @@ export interface ElectronAPI {
     retry(id: string): Promise<DownloadItem>;
     remove(id: string): Promise<string>;
     reorder(orderedIds: string[]): Promise<DownloadItem[]>;
+    openFolder(path: string): Promise<void>;
 
     // Event listeners
     onProgress(callback: (data: DownloadProgressPayload) => void): () => void;
@@ -61,6 +62,12 @@ export interface ElectronAPI {
     get(): Promise<AppSettings>;
     update(settings: Partial<AppSettings>): Promise<AppSettings>;
     reset(): Promise<AppSettings>;
+    selectDownloadFolder(): Promise<string | null>;
+  };
+
+  window: {
+    minimize(): Promise<void>;
+    close(): Promise<void>;
   };
 
   history: {

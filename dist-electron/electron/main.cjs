@@ -43,6 +43,10 @@ var IPC_CHANNELS = {
   SETTINGS_GET: "settings:get",
   SETTINGS_UPDATE: "settings:update",
   SETTINGS_RESET: "settings:reset",
+  SETTINGS_SELECT_DOWNLOAD_FOLDER: "settings:select-download-folder",
+  WINDOW_MINIMIZE: "window:minimize",
+  WINDOW_CLOSE: "window:close",
+  DOWNLOAD_OPEN_FOLDER: "download:open-folder",
   HISTORY_GET_ALL: "history:get-all",
   HISTORY_ADD: "history:add",
   HISTORY_REMOVE: "history:remove",
@@ -131,8 +135,10 @@ function parseVideoMetadata(raw, linkType, index = 1) {
     if (f.height && f.height > 0) heights.add(f.height);
   });
   const qualityOptions = Array.from(heights).sort((a, b) => b - a).map((h) => `${h}p`);
-  const videoFormats = new Set(formats.map((f) => f.ext).filter((ext) => !!ext));
-  const audioFormats = /* @__PURE__ */ new Set(["m4a", "mp3", "opus"]);
+  const videoFormats = new Set(
+    formats.map((f) => f.ext).filter((ext) => !!ext).filter((ext) => ["mp4", "webm", "mkv"].includes(ext))
+  );
+  const audioFormats = /* @__PURE__ */ new Set(["mp3", "opus"]);
   const bestFormat = formats.find((f) => f.height && f.height > 0) ?? formats[0];
   const resolution = bestFormat?.height ? `${bestFormat.height}p` : "1080p";
   const fps = bestFormat?.fps ?? 30;
@@ -345,6 +351,7 @@ var DefaultProcessExecutor2 = class {
 };
 var NativeDownloadService = class extends import_events.EventEmitter {
   activeDownloads = /* @__PURE__ */ new Map();
+  processGenerations = /* @__PURE__ */ new Map();
   items = /* @__PURE__ */ new Map();
   executor;
   ytdlpPath = null;
@@ -397,19 +404,26 @@ var NativeDownloadService = class extends import_events.EventEmitter {
    */
   buildYtdlpArgs(item, outputPath, isResume) {
     const args = [];
+    const isAudioFormat = ["mp3", "opus"].includes(item.format ?? "");
     if (isResume) {
       args.push("--continue");
     } else {
       args.push("--no-continue");
     }
     args.push("-o", outputPath);
-    if (item.quality && item.quality !== "auto") {
+    args.push("--force-overwrites");
+    if (isAudioFormat) {
+      args.push("-f", "bestaudio/best");
+      args.push("--extract-audio");
+      args.push("--audio-format", item.format);
+      args.push("--audio-quality", "0");
+    } else if (item.quality && item.quality !== "auto") {
       const height = item.quality.replace("p", "");
-      args.push("-f", `bestvideo[height<=${height}]+bestaudio/best[height<=${height}]`);
+      args.push("-f", `bestvideo[height<=${height}]+bestaudio/best`);
     } else {
       args.push("-f", "best");
     }
-    if (item.format && item.format !== "auto") {
+    if (item.format && item.format !== "auto" && !isAudioFormat) {
       args.push("--merge-output-format", item.format);
       args.push("--remux-video", item.format);
     }
@@ -427,24 +441,45 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     return args;
   }
   /**
-   * Parse yt-dlp progress line
-   * Format: "download:15.2%|1.5MiB|10MiB|500KiB/s|00:15"
+   * Parse yt-dlp progress line.
+   * Supports both legacy machine-readable output:
+   *   download:15.2%|1.5MiB|10MiB|500KiB/s|00:15
+   * and the real CLI output produced by yt-dlp:
+   *   [download]  15.3% of 10.0MiB at 1.0MiB/s ETA 00:05
    */
   parseProgressLine(line) {
-    if (!line.startsWith("download:")) {
+    const normalized = line.trim();
+    if (!normalized) return null;
+    const data = normalized.startsWith("download:") ? normalized.substring("download:".length) : normalized.replace(/^\[download\]\s*/i, "");
+    if (!data) return null;
+    const pipeParts = data.split("|");
+    if (pipeParts.length >= 5) {
+      const [percentPart, downloadedPart, totalPart, speedPart, etaPart] = pipeParts;
+      const progress2 = parseFloat(percentPart.trim().replace("%", "")) || 0;
+      const downloadedSize2 = this.parseSize(downloadedPart.trim());
+      const totalSize2 = this.parseSize(totalPart.trim());
+      const speed2 = this.parseSize(speedPart.trim().replace(/\/s$/i, ""));
+      const eta2 = etaPart.trim() === "Unknown ETA" ? "--" : etaPart.trim() || "--";
+      return {
+        progress: Math.min(100, progress2),
+        downloadedSize: downloadedSize2,
+        totalSize: totalSize2,
+        speed: speed2,
+        eta: eta2
+      };
+    }
+    const percentMatch = data.match(/(\d+(?:\.\d+)?)%/i);
+    if (!percentMatch) {
       return null;
     }
-    const data = line.substring(9);
-    const parts = data.split("|");
-    if (parts.length < 5) {
-      return null;
-    }
-    const percentStr = parts[0].trim().replace("%", "");
-    const progress = parseFloat(percentStr) || 0;
-    const downloadedSize = this.parseSize(parts[1].trim());
-    const totalSize = this.parseSize(parts[2].trim());
-    const speed = this.parseSize(parts[3].trim().replace("/s", ""));
-    const eta = parts[4].trim() === "Unknown ETA" ? "--" : parts[4].trim();
+    const progress = parseFloat(percentMatch[1]) || 0;
+    const totalMatch = data.match(/of\s+(\d+(?:\.\d+)?)\s*([KMGT]?i?B)/i);
+    const totalSize = this.parseSize(totalMatch ? `${totalMatch[1]}${totalMatch[2]}` : "0B");
+    const speedMatch = data.match(/at\s+(\d+(?:\.\d+)?)\s*([KMGT]?i?B)\/s/i) || data.match(/(\d+(?:\.\d+)?)\s*([KMGT]?i?B)\/s/i);
+    const speed = speedMatch ? this.parseSize(`${speedMatch[1]}${speedMatch[2]}`) : 0;
+    const etaMatch = data.match(/ETA\s+([0-9:]+|N\/A|Unknown ETA|Unknown)/i);
+    const eta = etaMatch && etaMatch[1] && etaMatch[1].toLowerCase() !== "unknown" && etaMatch[1].toLowerCase() !== "n/a" ? etaMatch[1] : "--";
+    const downloadedSize = totalSize > 0 ? Math.min(totalSize, Math.round(progress / 100 * totalSize)) : 0;
     return {
       progress: Math.min(100, progress),
       downloadedSize,
@@ -460,7 +495,8 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     if (!sizeStr || sizeStr === "N/A" || sizeStr === "Unknown") {
       return 0;
     }
-    const match = sizeStr.match(/^([\d.]+)\s*([KMGT]i?B)?$/i);
+    const normalized = sizeStr.trim().replace(/\s*\/s$/i, "");
+    const match = normalized.match(/^([\d.]+)\s*([KMGT]i?B)?$/i);
     if (!match) {
       return 0;
     }
@@ -503,21 +539,64 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       errorMessage
     });
   }
+  nextProcessGeneration(id) {
+    const next = (this.processGenerations.get(id) ?? 0) + 1;
+    this.processGenerations.set(id, next);
+    return next;
+  }
+  isCurrentProcess(id, generation) {
+    const activeGeneration = this.processGenerations.get(id) ?? 0;
+    if (activeGeneration !== generation) {
+      return false;
+    }
+    const currentItem = this.items.get(id);
+    if (!currentItem) {
+      return false;
+    }
+    return ["downloading", "retrying"].includes(currentItem.status);
+  }
   /**
    * Spawns yt-dlp process for download
    */
+  resolveDownloadFolder(downloadFolder) {
+    if (!downloadFolder || downloadFolder.trim() === "") {
+      return process.env.HOME || process.env.USERPROFILE || process.cwd();
+    }
+    if (downloadFolder === "~") {
+      return process.env.HOME || process.env.USERPROFILE || process.cwd();
+    }
+    if (downloadFolder.startsWith("~/") || downloadFolder.startsWith("~\\")) {
+      const homeDir = process.env.HOME || process.env.USERPROFILE || process.cwd();
+      return path.join(homeDir, downloadFolder.slice(2));
+    }
+    return downloadFolder;
+  }
+  async cleanupStaleDownloadArtifacts(outputPath) {
+    const candidates = [outputPath, `${outputPath}.part`];
+    for (const candidate of candidates) {
+      try {
+        await fs.rm(candidate, { force: true });
+      } catch {
+      }
+    }
+  }
   async spawnDownload(item, isResume) {
     if (!this.ytdlpPath) {
       this.ytdlpPath = await this.resolveYtdlpPath();
     }
     const fileName = `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.${item.format}`;
-    const outputPath = path.join(this.settings.downloadFolder, fileName);
+    const outputDir = this.resolveDownloadFolder(this.settings.downloadFolder);
+    const outputPath = path.join(outputDir, fileName);
+    if (!isResume) {
+      await this.cleanupStaleDownloadArtifacts(outputPath);
+    }
     const args = this.buildYtdlpArgs(item, outputPath, isResume);
     const proc = this.executor.spawn(this.ytdlpPath, args, {
       windowsHide: true,
       shell: false
       // Security: never use shell
     });
+    const generation = this.nextProcessGeneration(item.id);
     const activeDownload = {
       item,
       process: proc,
@@ -536,21 +615,25 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       stdoutBuffer = lines.pop() || "";
       for (const line of lines) {
         const progress = this.parseProgressLine(line.trim());
-        if (progress) {
-          activeDownload.lastProgressTime = Date.now();
-          this.emitProgress(item.id, progress);
-          const currentItem = this.items.get(item.id);
-          if (currentItem) {
-            this.items.set(item.id, {
-              ...currentItem,
-              progress: progress.progress,
-              downloadedSize: progress.downloadedSize,
-              fileSize: progress.totalSize || currentItem.fileSize,
-              speed: progress.speed,
-              eta: progress.eta,
-              lastUpdatedAt: Date.now()
-            });
-          }
+        if (!progress) {
+          continue;
+        }
+        if (!this.isCurrentProcess(item.id, generation)) {
+          continue;
+        }
+        activeDownload.lastProgressTime = Date.now();
+        this.emitProgress(item.id, progress);
+        const currentItem = this.items.get(item.id);
+        if (currentItem) {
+          this.items.set(item.id, {
+            ...currentItem,
+            progress: progress.progress,
+            downloadedSize: progress.downloadedSize,
+            fileSize: progress.totalSize || currentItem.fileSize,
+            speed: progress.speed,
+            eta: progress.eta,
+            lastUpdatedAt: Date.now()
+          });
         }
       }
     });
@@ -558,6 +641,9 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       stderrBuffer += data.toString();
     });
     proc.on("exit", (code) => {
+      if (!this.isCurrentProcess(item.id, generation)) {
+        return;
+      }
       this.activeDownloads.delete(item.id);
       if (code === 0) {
         const currentItem = this.items.get(item.id);
@@ -580,9 +666,9 @@ var NativeDownloadService = class extends import_events.EventEmitter {
                   });
                   this.emitStateChange(item.id, "completed");
                 }
-              }, 500);
+              }, 100);
             }
-          }, 500);
+          }, 100);
         }
       } else {
         const currentItem = this.items.get(item.id);
@@ -599,6 +685,9 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       }
     });
     proc.on("error", (err) => {
+      if (!this.isCurrentProcess(item.id, generation)) {
+        return;
+      }
       this.activeDownloads.delete(item.id);
       let errorCode = "ytdlp_error";
       let errorMessage = "Failed to spawn yt-dlp process";
@@ -675,7 +764,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       throw new Error(`Download item not found: ${id}`);
     }
     const activeCount = Array.from(this.items.values()).filter(
-      (i) => ["downloading", "merging", "converting"].includes(i.status)
+      (i) => i.id !== id && ["downloading", "retrying", "merging", "converting"].includes(i.status)
     ).length;
     if (activeCount >= this.settings.concurrentDownloads) {
       throw new Error("Concurrent download limit reached");
@@ -708,10 +797,14 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     if (activeDownload && activeDownload.process) {
       activeDownload.process.kill();
       this.activeDownloads.delete(id);
+      this.nextProcessGeneration(id);
     }
+    const currentItem = this.items.get(id);
     this.updateItemStatus(id, "paused", {
       speed: 0,
-      eta: "--"
+      eta: "--",
+      progress: currentItem?.progress ?? 0,
+      downloadedSize: currentItem?.downloadedSize ?? 0
     });
     this.emitStateChange(id, "paused");
     return this.items.get(id);
@@ -728,7 +821,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       throw new Error(`Cannot resume download in status: ${item.status}`);
     }
     const activeCount = Array.from(this.items.values()).filter(
-      (i) => ["analyzing", "downloading", "merging", "converting"].includes(i.status)
+      (i) => i.id !== id && ["downloading", "retrying", "merging", "converting"].includes(i.status)
     ).length;
     if (activeCount >= this.settings.concurrentDownloads) {
       throw new Error("Concurrent download limit reached");
@@ -761,10 +854,14 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     if (activeDownload && activeDownload.process) {
       activeDownload.process.kill();
       this.activeDownloads.delete(id);
+      this.nextProcessGeneration(id);
     }
+    const currentItem = this.items.get(id);
     this.updateItemStatus(id, "canceled", {
       speed: 0,
-      eta: "--"
+      eta: "--",
+      progress: currentItem?.progress ?? 0,
+      downloadedSize: currentItem?.downloadedSize ?? 0
     });
     this.emitStateChange(id, "canceled");
     return this.items.get(id);
@@ -780,24 +877,30 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     if (item.status !== "failed" && item.status !== "canceled") {
       throw new Error(`Cannot retry download in status: ${item.status}`);
     }
-    this.updateItemStatus(id, "retrying", {
+    const activeCount = Array.from(this.items.values()).filter(
+      (i) => i.id !== id && ["downloading", "retrying", "merging", "converting"].includes(i.status)
+    ).length;
+    if (activeCount >= this.settings.concurrentDownloads) {
+      throw new Error("Concurrent download limit reached");
+    }
+    const resetItem = {
+      ...item,
+      status: "retrying",
       progress: 0,
       downloadedSize: 0,
       speed: 0,
       eta: "--",
       retryCount: item.retryCount + 1,
       errorCode: void 0,
-      errorMessage: void 0
-    });
+      errorMessage: void 0,
+      lastUpdatedAt: Date.now()
+    };
+    this.items.set(id, resetItem);
     this.emitStateChange(id, "retrying");
     setTimeout(() => {
-      const currentItem = this.items.get(id);
-      if (currentItem && currentItem.status === "retrying") {
-        this.updateItemStatus(id, "analyzing");
-        this.emitStateChange(id, "analyzing");
-      }
-    }, 300);
-    return this.items.get(id);
+      void this.spawnDownload(resetItem, false);
+    }, 0);
+    return this.items.get(id) ?? resetItem;
   }
   /**
    * Remove download item
@@ -827,7 +930,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
    */
   getActiveCount() {
     return Array.from(this.items.values()).filter(
-      (i) => ["analyzing", "downloading", "merging", "converting"].includes(i.status)
+      (i) => ["downloading", "retrying", "merging", "converting"].includes(i.status)
     ).length;
   }
   /**
@@ -852,9 +955,9 @@ var DEFAULT_SETTINGS = {
   language: "en",
   concurrentDownloads: 3,
   speedLimit: "unlimited",
-  defaultQuality: "1080p",
+  defaultQuality: "720p",
   defaultVideoFormat: "mp4",
-  defaultAudioFormat: "m4a",
+  defaultAudioFormat: "mp3",
   enableNotifications: true,
   notificationWhenCompleted: true,
   notificationWhenFailed: true,
@@ -1499,6 +1602,63 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
+  import_electron2.ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, async () => {
+    const focusedWindow = import_electron2.BrowserWindow.getFocusedWindow();
+    if (focusedWindow) {
+      focusedWindow.minimize();
+    }
+    return wrapSuccess(void 0);
+  });
+  import_electron2.ipcMain.handle(IPC_CHANNELS.WINDOW_CLOSE, async () => {
+    const focusedWindow = import_electron2.BrowserWindow.getFocusedWindow();
+    if (focusedWindow) {
+      focusedWindow.close();
+    }
+    return wrapSuccess(void 0);
+  });
+  import_electron2.ipcMain.handle(IPC_CHANNELS.SETTINGS_SELECT_DOWNLOAD_FOLDER, async () => {
+    try {
+      const focusedWindow = import_electron2.BrowserWindow.getFocusedWindow();
+      const result = await import_electron2.dialog.showOpenDialog(focusedWindow || new import_electron2.BrowserWindow(), {
+        properties: ["openDirectory"]
+      });
+      if (result.canceled || result.filePaths.length === 0) {
+        return wrapSuccess(null);
+      }
+      const folderPath = result.filePaths[0];
+      const updatedSettings = await settingsService.update({ downloadFolder: folderPath });
+      if (downloadService) {
+        downloadService.updateSettings(updatedSettings);
+      }
+      return wrapSuccess(folderPath);
+    } catch (err) {
+      return wrapError(err);
+    }
+  });
+  function resolveDownloadFolderPath(folderPath) {
+    if (!folderPath || folderPath.trim() === "") {
+      return import_electron2.app.getPath("downloads");
+    }
+    if (folderPath === "~") {
+      return import_electron2.app.getPath("home");
+    }
+    if (folderPath.startsWith("~/")) {
+      return `${import_electron2.app.getPath("home")}${folderPath.slice(1)}`;
+    }
+    if (folderPath.startsWith("~\\")) {
+      return `${import_electron2.app.getPath("home")}${folderPath.slice(1)}`;
+    }
+    return folderPath;
+  }
+  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_OPEN_FOLDER, async (_, { path: path3 }) => {
+    try {
+      const folderPath = resolveDownloadFolderPath(path3 ?? "");
+      await import_electron2.shell.openPath(folderPath);
+      return wrapSuccess(void 0);
+    } catch (err) {
+      return wrapError(err);
+    }
+  });
   import_electron2.ipcMain.handle(IPC_CHANNELS.HISTORY_GET_ALL, async () => {
     try {
       const data = await historyService.getAll();
@@ -1606,6 +1766,9 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 600,
     title: "Remon Download",
+    autoHideMenuBar: true,
+    titleBarStyle: "hidden",
+    trafficLightPosition: { x: 18, y: 18 },
     webPreferences: {
       preload: path2.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -1613,6 +1776,28 @@ function createWindow() {
       sandbox: true,
       webSecurity: true
     }
+  });
+  mainWindow.setMenuBarVisibility(false);
+  mainWindow.setAutoHideMenuBar(true);
+  mainWindow.webContents.on("context-menu", (_event, params) => {
+    if (!mainWindow) {
+      return;
+    }
+    const template = [
+      ...params.isEditable ? [
+        { label: "Cut", role: "cut", enabled: params.editFlags.canCut },
+        { label: "Copy", role: "copy", enabled: params.editFlags.canCopy },
+        { label: "Paste", role: "paste", enabled: params.editFlags.canPaste },
+        { label: "Select All", role: "selectAll" }
+      ] : [],
+      ...!params.isEditable && params.selectionText ? [{ label: "Copy", role: "copy" }] : [],
+      ...!params.isEditable && !params.selectionText ? [{ label: "Paste", role: "paste", enabled: params.isEditable }] : []
+    ];
+    if (template.length === 0) {
+      return;
+    }
+    const menu = import_electron3.Menu.buildFromTemplate(template);
+    menu.popup({ window: mainWindow });
   });
   registerIpcHandlers();
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;

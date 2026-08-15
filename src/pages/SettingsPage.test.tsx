@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../i18n";
 import { DEFAULT_SETTINGS } from "../constants/settings";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -74,6 +74,36 @@ describe("SettingsPage", () => {
       ffmpegPath: "C:/tools/ffmpeg.exe",
       proxy: "http://localhost:8080"
     });
+  });
+
+  it("opens the native folder picker when Browse is clicked", async () => {
+    const user = userEvent.setup();
+    const selectDownloadFolder = vi.fn().mockResolvedValue("D:/Media");
+    const previous = window.electronAPI;
+    Object.defineProperty(window, "electronAPI", {
+      value: {
+        isElectron: true,
+        settings: {
+          get: vi.fn().mockResolvedValue({ ...DEFAULT_SETTINGS, downloadFolder: "~/Downloads" }),
+          update: vi.fn(async (patch) => ({ ...DEFAULT_SETTINGS, ...patch })),
+          reset: vi.fn().mockResolvedValue(DEFAULT_SETTINGS),
+          selectDownloadFolder
+        }
+      },
+      configurable: true,
+      writable: true
+    });
+
+    render(<SettingsPage />);
+    await user.click(screen.getByRole("button", { name: "Browse" }));
+
+    expect(selectDownloadFolder).toHaveBeenCalledTimes(1);
+    expect(useSettingsStore.getState().settings.downloadFolder).toBe("D:/Media");
+    if (previous) {
+      Object.defineProperty(window, "electronAPI", { value: previous, configurable: true, writable: true });
+    } else {
+      delete (window as { electronAPI?: unknown }).electronAPI;
+    }
   });
 
   it("renders smart file naming preview and resets settings", async () => {

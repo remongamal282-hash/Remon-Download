@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useHistoryStore } from "../stores/historyStore";
 import { useFavoritesStore } from "../stores/favoritesStore";
+import { useSettingsStore } from "../stores/settingsStore";
 import type { HistoryItem, HistoryStatus } from "../types/download";
 import { formatBytes } from "../utils/format";
 
@@ -67,6 +68,7 @@ function HistoryRow({ item }: { item: HistoryItem }) {
   const remove = useHistoryStore((state) => state.remove);
   const redownload = useHistoryStore((state) => state.redownload);
   const openFolder = useHistoryStore((state) => state.openFolder);
+  const settings = useSettingsStore((state) => state.settings);
   const addToFavorites = useFavoritesStore((state) => state.add);
 
   function handleRedownload() {
@@ -75,10 +77,21 @@ function HistoryRow({ item }: { item: HistoryItem }) {
     }
   }
 
-  function handleOpenFolder() {
-    if (openFolder(item.id)) {
-      toast.info(t("history.toast.openFolderMock"));
+  async function handleOpenFolder() {
+    if (!openFolder(item.id)) {
+      return;
     }
+
+    if (typeof window !== "undefined" && window.electronAPI?.download?.openFolder) {
+      try {
+        await window.electronAPI.download.openFolder(settings.downloadFolder);
+        return;
+      } catch (error) {
+        console.error("[HistoryPage] Failed to open download folder:", error);
+      }
+    }
+
+    toast.info(t("history.toast.openFolderMock"));
   }
 
   async function handleAddToFavorites() {

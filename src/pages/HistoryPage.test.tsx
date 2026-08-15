@@ -74,9 +74,15 @@ describe("HistoryPage", () => {
     expect(screen.getAllByText("Canceled").length).toBeGreaterThan(0);
   });
 
-  it("supports re-download, open folder simulation, and remove interactions", async () => {
+  it("supports re-download, real open folder, and remove interactions", async () => {
     await useHistoryStore.getState().addFromDownload(baseDownload, "2026-08-14T08:10:00.000Z");
     const user = userEvent.setup();
+    const openFolder = vi.fn().mockResolvedValue(undefined);
+    (window as any).electronAPI = {
+      download: { openFolder }
+    };
+    await useHistoryStore.getState().clear();
+    await useHistoryStore.getState().addFromDownload(baseDownload, "2026-08-14T08:10:00.000Z");
 
     render(<HistoryPage />);
 
@@ -90,6 +96,7 @@ describe("HistoryPage", () => {
 
     await user.keyboard("{Tab}");
     await user.click(within(row).getByRole("button", { name: "Open Folder" }));
+    await waitFor(() => expect(openFolder).toHaveBeenCalledWith("~/Downloads"));
     expect(useHistoryStore.getState().error).toBeNull();
 
     await user.click(within(row).getByRole("button", { name: "Remove" }));

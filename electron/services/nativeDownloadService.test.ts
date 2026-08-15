@@ -19,6 +19,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { EventEmitter } from "events";
+import type { ChildProcess } from "child_process";
 import { NativeDownloadService, ProcessExecutor } from "./nativeDownloadService";
 import type { DownloadItem } from "../../src/types/download";
 import type { AppSettings } from "../../src/types/settings";
@@ -228,6 +229,49 @@ describe("NativeDownloadService", () => {
       mockExecutor.setSpawnBehavior("yt-dlp", { stdout: "", stderr: "", exitCode: 0 });
     });
 
+    it("should parse real yt-dlp stdout progress lines", () => {
+      const parsed = (service as any).parseProgressLine("[download]  15.3% of 10.0MiB at 1.0MiB/s ETA 00:05");
+
+      expect(parsed).toMatchObject({
+        progress: 15.3,
+        totalSize: 10 * 1024 * 1024,
+        speed: 1024 * 1024,
+        eta: "00:05"
+      });
+      expect(parsed?.downloadedSize).toBeGreaterThan(0);
+    });
+
+    it("should retry a failed item and start a new yt-dlp process", async () => {
+      let spawnCount = 0;
+      const customExecutor: ProcessExecutor = {
+        async checkAccess() { },
+        spawn(command: string, _args: string[], _options?: any) {
+          spawnCount += 1;
+          const proc = new MockChildProcess() as unknown as import("child_process").ChildProcess;
+          setTimeout(() => {
+            if (proc.stdout) {
+              proc.stdout.emit("data", Buffer.from("download:25.0%|10MiB|40MiB|5MiB/s|00:05\n"));
+            }
+            proc.emit("exit", 0);
+          }, 10);
+          return proc;
+        }
+      };
+
+      const settingsWithYtdlp = createMockSettings({ ytdlpPath: "yt-dlp" });
+      service = new NativeDownloadService(settingsWithYtdlp, customExecutor);
+      const item = createMockDownloadItem({ status: "failed" });
+      await service.add(item);
+
+      await service.retry(item.id);
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      const updated = (await service.getAll()).find((entry) => entry.id === item.id)!;
+      expect(updated.status).toBe("completed");
+      expect(updated.retryCount).toBe(1);
+      expect(spawnCount).toBe(1);
+    });
+
     it("should add item to queue", async () => {
       const item = createMockDownloadItem();
       const added = await service.add(item);
@@ -316,6 +360,107 @@ describe("NativeDownloadService", () => {
       expect(retried.retryCount).toBe(1);
       expect(retried.progress).toBe(0);
       expect(retried.downloadedSize).toBe(0);
+    });
+
+    it("should freeze progress state after pause and ignore stale events", async () => {
+      let proc: MockChildProcess | undefined;
+      const customExecutor: ProcessExecutor = {
+        async checkAccess() { },
+        spawn(command: string, _args: string[], _options?: any) {
+          proc = new MockChildProcess();
+          setTimeout(() => {
+            proc!.stdout.emit("data", Buffer.from("download:65.0%|59MiB|91MiB|1.6MiB/s|00:20\n"));
+          }, 20);
+          setTimeout(() => {
+            proc!.stdout.emit("data", Buffer.from("download:70.0%|60MiB|91MiB|1.8MiB/s|00:18\n"));
+          }, 80);
+          return proc as unknown as ChildProcess;
+        }
+      };
+
+      service = new NativeDownloadService(createMockSettings({ ytdlpPath: "yt-dlp" }), customExecutor);
+      const item = createMockDownloadItem({ status: "analyzing" });
+      await service.add(item);
+      await service.start(item.id);
+
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      await service.pause(item.id);
+
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      const updated = (await service.getAll()).find((entry) => entry.id === item.id)!;
+
+      expect(updated.status).toBe("paused");
+      expect(updated.progress).toBe(65);
+      expect(updated.speed).toBe(0);
+      expect(updated.eta).toBe("--");
+    });
+
+    it("should ignore stale progress after cancel", async () => {
+      let proc: MockChildProcess | undefined;
+      const customExecutor: ProcessExecutor = {
+        async checkAccess() { },
+        spawn(command: string, _args: string[], _options?: any) {
+          proc = new MockChildProcess();
+          setTimeout(() => {
+            proc!.stdout.emit("data", Buffer.from("download:50.0%|50MiB|100MiB|1.0MiB/s|00:30\n"));
+          }, 20);
+          return proc as unknown as ChildProcess;
+        }
+      };
+
+      service = new NativeDownloadService(createMockSettings({ ytdlpPath: "yt-dlp" }), customExecutor);
+      const item = createMockDownloadItem({ status: "analyzing" });
+      await service.add(item);
+      await service.start(item.id);
+
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await service.cancel(item.id);
+
+      setTimeout(() => {
+        proc!.stdout.emit("data", Buffer.from("download:99.0%|99MiB|100MiB|2.0MiB/s|00:01\n"));
+      }, 30);
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const updated = (await service.getAll()).find((entry) => entry.id === item.id)!;
+      expect(updated.status).toBe("canceled");
+      expect(updated.progress).toBeLessThan(99);
+    });
+
+    it("should ignore stale progress after failed and completed states", async () => {
+      let activeProc: MockChildProcess | undefined;
+      const customExecutor: ProcessExecutor = {
+        async checkAccess() { },
+        spawn(command: string, _args: string[], _options?: any) {
+          const nextProc = new MockChildProcess();
+          activeProc = nextProc;
+          setTimeout(() => {
+            nextProc.stdout.emit("data", Buffer.from("download:40.0%|40MiB|100MiB|1.0MiB/s|00:40\n"));
+          }, 30);
+          setTimeout(() => {
+            nextProc.emit("exit", 0);
+          }, 50);
+          return nextProc as unknown as ChildProcess;
+        }
+      };
+
+      service = new NativeDownloadService(createMockSettings({ ytdlpPath: "yt-dlp" }), customExecutor);
+      const failedItem = createMockDownloadItem({ status: "analyzing" });
+      await service.add(failedItem);
+      await service.start(failedItem.id);
+      await service.pause(failedItem.id);
+
+      const completedItem = createMockDownloadItem({ status: "analyzing" });
+      await service.add(completedItem);
+      await service.start(completedItem.id);
+
+      setTimeout(() => {
+        activeProc!.stdout.emit("data", Buffer.from("download:100.0%|100MiB|100MiB|0B/s|00:00\n"));
+        activeProc!.emit("exit", 0);
+      }, 30);
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect((await service.getAll()).find((entry) => entry.id === failedItem.id)?.status).toBe("paused");
+      expect((await service.getAll()).find((entry) => entry.id === completedItem.id)?.status).toBe("completed");
     });
 
     it("should remove download item", async () => {
@@ -634,7 +779,7 @@ describe("NativeDownloadService", () => {
       mockExecutor.setDefaultAccessBehavior({ shouldSucceed: true });
     });
 
-    it("should include quality in yt-dlp arguments", async () => {
+    it("should use a video format selector for 720p mp4 downloads", async () => {
       let capturedArgs: string[] = [];
       const originalSpawn = mockExecutor.spawn.bind(mockExecutor);
       mockExecutor.spawn = (cmd: string, args: string[], opts?: any) => {
@@ -648,12 +793,39 @@ describe("NativeDownloadService", () => {
         exitCode: 0
       });
 
-      const item = createMockDownloadItem({ status: "analyzing", quality: "720p" });
+      const item = createMockDownloadItem({ status: "analyzing", quality: "720p", format: "mp4" });
       await service.add(item);
       await service.start(item.id);
 
       expect(capturedArgs).toContain("-f");
-      expect(capturedArgs.some((arg) => arg.includes("720"))).toBe(true);
+      expect(capturedArgs.some((arg) => arg.includes("bestvideo[height<=720]+bestaudio/best"))).toBe(true);
+      expect(capturedArgs).toContain("--merge-output-format");
+      expect(capturedArgs).toContain("mp4");
+    });
+
+    it("should use an audio-only selector for mp3 downloads", async () => {
+      let capturedArgs: string[] = [];
+      const originalSpawn = mockExecutor.spawn.bind(mockExecutor);
+      mockExecutor.spawn = (cmd: string, args: string[], opts?: any) => {
+        capturedArgs = args;
+        return originalSpawn(cmd, args, opts);
+      };
+
+      mockExecutor.setSpawnBehavior("yt-dlp", {
+        stdout: "",
+        stderr: "",
+        exitCode: 0
+      });
+
+      const item = createMockDownloadItem({ status: "analyzing", quality: "audio", format: "mp3" });
+      await service.add(item);
+      await service.start(item.id);
+
+      expect(capturedArgs).toContain("-f");
+      expect(capturedArgs).toContain("bestaudio/best");
+      expect(capturedArgs).toContain("--extract-audio");
+      expect(capturedArgs).toContain("--audio-format");
+      expect(capturedArgs).toContain("mp3");
     });
 
     it("should include speed limit in arguments when not unlimited", async () => {

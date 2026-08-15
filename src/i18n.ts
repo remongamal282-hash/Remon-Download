@@ -21,6 +21,7 @@ export const resources = {
         subtitle: "Analyze a YouTube video, short, playlist, playlist video, or channel.",
         urlLabel: "YouTube URL",
         urlPlaceholder: "https://www.youtube.com/watch?v=...",
+        clearUrl: "Clear URL",
         analyze: "Analyze",
         analyzing: "Analyzing...",
         detected: "Detected",
@@ -46,6 +47,7 @@ export const resources = {
         reorder: "Reorder {{title}}",
         pause: "Pause",
         resume: "Resume",
+        openFolder: "Open Folder",
         cancel: "Cancel",
         retry: "Retry",
         remove: "Remove",
@@ -192,6 +194,7 @@ export const resources = {
           fileNaming: "Smart file naming"
         },
         downloadFolder: "Download folder",
+        browse: "Browse",
         startWithWindows: "Start with Windows",
         minimizeToTray: "Minimize to tray",
         theme: "Theme",
@@ -221,7 +224,8 @@ export const resources = {
         fileNameTemplate: "File name template",
         fileNamePreview: "Live preview",
         toast: {
-          reset: "Settings reset to defaults."
+          reset: "Settings reset to defaults.",
+          folderPickerUnavailable: "Folder picker is only available in the desktop app."
         }
       },
       validation: {
@@ -305,6 +309,7 @@ export const resources = {
         subtitle: "حلل رابط فيديو أو شورت أو قائمة تشغيل أو قناة من YouTube.",
         urlLabel: "رابط YouTube",
         urlPlaceholder: "https://www.youtube.com/watch?v=...",
+        clearUrl: "مسح الرابط",
         analyze: "تحليل",
         analyzing: "جار التحليل...",
         detected: "تم الاكتشاف",
@@ -330,6 +335,7 @@ export const resources = {
         reorder: "إعادة ترتيب {{title}}",
         pause: "إيقاف مؤقت",
         resume: "استئناف",
+        openFolder: "فتح المجلد",
         cancel: "إلغاء",
         retry: "إعادة المحاولة",
         remove: "حذف",

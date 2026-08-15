@@ -1,7 +1,7 @@
 # Remon Download — Prototype Specification
 
-> **Status:** Final / Implementation Ready  
-> **Document Type:** Executable Specification for AI Coding Agent  
+> **Status:** Final / Implementation Ready
+> **Document Type:** Executable Specification for AI Coding Agent
 > **Single Source of Truth:** `docs/SPEC.md`
 
 هذه الوثيقة هي المرجع الرسمي الوحيد لمتطلبات مرحلة React Prototype. عند وجود تعارض بين هذه الوثيقة وأي محادثة أو ذاكرة سابقة، تُعتمد هذه الوثيقة.
@@ -886,9 +886,9 @@ UI فقط.
 ```text
 concurrentDownloads: 3
 speedLimit: unlimited
-defaultQuality: 1080p
+defaultQuality: 720p
 defaultVideoFormat: mp4
-defaultAudioFormat: m4a
+defaultAudioFormat: mp3
 
 enableNotifications: true
 notificationWhenCompleted: true

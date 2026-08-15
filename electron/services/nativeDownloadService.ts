@@ -78,6 +78,7 @@ interface YtdlpProgress {
  */
 export class NativeDownloadService extends EventEmitter {
   private activeDownloads: Map<string, ActiveDownload> = new Map();
+  private processGenerations: Map<string, number> = new Map();
   private items: Map<string, DownloadItem> = new Map();
   private executor: ProcessExecutor;
   private ytdlpPath: string | null = null;
@@ -143,6 +144,7 @@ export class NativeDownloadService extends EventEmitter {
    */
   private buildYtdlpArgs(item: DownloadItem, outputPath: string, isResume: boolean): string[] {
     const args: string[] = [];
+    const isAudioFormat = ["mp3", "opus"].includes(item.format ?? "");
 
     // Continue from partial download if resume
     if (isResume) {
@@ -153,18 +155,23 @@ export class NativeDownloadService extends EventEmitter {
 
     // Output path
     args.push("-o", outputPath);
+    args.push("--force-overwrites");
 
     // Quality/format selection
-    if (item.quality && item.quality !== "auto") {
-      // Format: bestvideo[height<=1080]+bestaudio/best[height<=1080]
+    if (isAudioFormat) {
+      args.push("-f", "bestaudio/best");
+      args.push("--extract-audio");
+      args.push("--audio-format", item.format!);
+      args.push("--audio-quality", "0");
+    } else if (item.quality && item.quality !== "auto") {
       const height = item.quality.replace("p", "");
-      args.push("-f", `bestvideo[height<=${height}]+bestaudio/best[height<=${height}]`);
+      args.push("-f", `bestvideo[height<=${height}]+bestaudio/best`);
     } else {
       args.push("-f", "best");
     }
 
     // Merge output format (prefer user's choice, fallback to best available)
-    if (item.format && item.format !== "auto") {
+    if (item.format && item.format !== "auto" && !isAudioFormat) {
       args.push("--merge-output-format", item.format);
       // Remux to preferred format if needed (fast, no re-encoding)
       args.push("--remux-video", item.format);
@@ -196,36 +203,60 @@ export class NativeDownloadService extends EventEmitter {
   }
 
   /**
-   * Parse yt-dlp progress line
-   * Format: "download:15.2%|1.5MiB|10MiB|500KiB/s|00:15"
+   * Parse yt-dlp progress line.
+   * Supports both legacy machine-readable output:
+   *   download:15.2%|1.5MiB|10MiB|500KiB/s|00:15
+   * and the real CLI output produced by yt-dlp:
+   *   [download]  15.3% of 10.0MiB at 1.0MiB/s ETA 00:05
    */
   private parseProgressLine(line: string): YtdlpProgress | null {
-    if (!line.startsWith("download:")) {
+    const normalized = line.trim();
+    if (!normalized) return null;
+
+    const data = normalized.startsWith("download:")
+      ? normalized.substring("download:".length)
+      : normalized.replace(/^\[download\]\s*/i, "");
+
+    if (!data) return null;
+
+    const pipeParts = data.split("|");
+    if (pipeParts.length >= 5) {
+      const [percentPart, downloadedPart, totalPart, speedPart, etaPart] = pipeParts;
+      const progress = parseFloat(percentPart.trim().replace("%", "")) || 0;
+      const downloadedSize = this.parseSize(downloadedPart.trim());
+      const totalSize = this.parseSize(totalPart.trim());
+      const speed = this.parseSize(speedPart.trim().replace(/\/s$/i, ""));
+      const eta = etaPart.trim() === "Unknown ETA" ? "--" : etaPart.trim() || "--";
+
+      return {
+        progress: Math.min(100, progress),
+        downloadedSize,
+        totalSize,
+        speed,
+        eta
+      };
+    }
+
+    const percentMatch = data.match(/(\d+(?:\.\d+)?)%/i);
+    if (!percentMatch) {
       return null;
     }
 
-    const data = line.substring(9); // Remove "download:" prefix
-    const parts = data.split("|");
+    const progress = parseFloat(percentMatch[1]) || 0;
 
-    if (parts.length < 5) {
-      return null;
-    }
+    const totalMatch = data.match(/of\s+(\d+(?:\.\d+)?)\s*([KMGT]?i?B)/i);
+    const totalSize = this.parseSize(totalMatch ? `${totalMatch[1]}${totalMatch[2]}` : "0B");
 
-    // Parse percent (e.g., "15.2%" → 15.2)
-    const percentStr = parts[0].trim().replace("%", "");
-    const progress = parseFloat(percentStr) || 0;
+    const speedMatch = data.match(/at\s+(\d+(?:\.\d+)?)\s*([KMGT]?i?B)\/s/i)
+      || data.match(/(\d+(?:\.\d+)?)\s*([KMGT]?i?B)\/s/i);
+    const speed = speedMatch ? this.parseSize(`${speedMatch[1]}${speedMatch[2]}`) : 0;
 
-    // Parse downloaded bytes (e.g., "1.5MiB" → bytes)
-    const downloadedSize = this.parseSize(parts[1].trim());
+    const etaMatch = data.match(/ETA\s+([0-9:]+|N\/A|Unknown ETA|Unknown)/i);
+    const eta = etaMatch && etaMatch[1] && etaMatch[1].toLowerCase() !== "unknown" && etaMatch[1].toLowerCase() !== "n/a"
+      ? etaMatch[1]
+      : "--";
 
-    // Parse total bytes (e.g., "10MiB" → bytes)
-    const totalSize = this.parseSize(parts[2].trim());
-
-    // Parse speed (e.g., "500KiB/s" → bytes/sec)
-    const speed = this.parseSize(parts[3].trim().replace("/s", ""));
-
-    // Parse ETA (e.g., "00:15" or "Unknown ETA")
-    const eta = parts[4].trim() === "Unknown ETA" ? "--" : parts[4].trim();
+    const downloadedSize = totalSize > 0 ? Math.min(totalSize, Math.round((progress / 100) * totalSize)) : 0;
 
     return {
       progress: Math.min(100, progress),
@@ -244,7 +275,8 @@ export class NativeDownloadService extends EventEmitter {
       return 0;
     }
 
-    const match = sizeStr.match(/^([\d.]+)\s*([KMGT]i?B)?$/i);
+    const normalized = sizeStr.trim().replace(/\s*\/s$/i, "");
+    const match = normalized.match(/^([\d.]+)\s*([KMGT]i?B)?$/i);
     if (!match) {
       return 0;
     }
@@ -293,9 +325,58 @@ export class NativeDownloadService extends EventEmitter {
     });
   }
 
+  private nextProcessGeneration(id: string): number {
+    const next = (this.processGenerations.get(id) ?? 0) + 1;
+    this.processGenerations.set(id, next);
+    return next;
+  }
+
+  private isCurrentProcess(id: string, generation: number): boolean {
+    const activeGeneration = this.processGenerations.get(id) ?? 0;
+    if (activeGeneration !== generation) {
+      return false;
+    }
+
+    const currentItem = this.items.get(id);
+    if (!currentItem) {
+      return false;
+    }
+
+    return ["downloading", "retrying"].includes(currentItem.status);
+  }
+
   /**
    * Spawns yt-dlp process for download
    */
+  private resolveDownloadFolder(downloadFolder: string): string {
+    if (!downloadFolder || downloadFolder.trim() === "") {
+      return process.env.HOME || process.env.USERPROFILE || process.cwd();
+    }
+
+    if (downloadFolder === "~") {
+      return process.env.HOME || process.env.USERPROFILE || process.cwd();
+    }
+
+    if (downloadFolder.startsWith("~/") || downloadFolder.startsWith("~\\")) {
+      const homeDir = process.env.HOME || process.env.USERPROFILE || process.cwd();
+      return path.join(homeDir, downloadFolder.slice(2));
+    }
+
+    return downloadFolder;
+  }
+
+  private async cleanupStaleDownloadArtifacts(outputPath: string): Promise<void> {
+    const candidates = [outputPath, `${outputPath}.part`];
+
+    for (const candidate of candidates) {
+      try {
+        await fs.rm(candidate, { force: true });
+      } catch {
+        // Ignore cleanup errors; the next spawn should still proceed.
+      }
+    }
+  }
+
   private async spawnDownload(item: DownloadItem, isResume: boolean): Promise<void> {
     // Resolve yt-dlp path (cached after first successful resolution)
     if (!this.ytdlpPath) {
@@ -304,7 +385,12 @@ export class NativeDownloadService extends EventEmitter {
 
     // Build output path
     const fileName = `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.${item.format}`;
-    const outputPath = path.join(this.settings.downloadFolder, fileName);
+    const outputDir = this.resolveDownloadFolder(this.settings.downloadFolder);
+    const outputPath = path.join(outputDir, fileName);
+
+    if (!isResume) {
+      await this.cleanupStaleDownloadArtifacts(outputPath);
+    }
 
     // Build arguments
     const args = this.buildYtdlpArgs(item, outputPath, isResume);
@@ -314,6 +400,8 @@ export class NativeDownloadService extends EventEmitter {
       windowsHide: true,
       shell: false // Security: never use shell
     });
+
+    const generation = this.nextProcessGeneration(item.id);
 
     // Store active download
     const activeDownload: ActiveDownload = {
@@ -340,23 +428,29 @@ export class NativeDownloadService extends EventEmitter {
 
       for (const line of lines) {
         const progress = this.parseProgressLine(line.trim());
-        if (progress) {
-          activeDownload.lastProgressTime = Date.now();
-          this.emitProgress(item.id, progress);
+        if (!progress) {
+          continue;
+        }
 
-          // Update item progress
-          const currentItem = this.items.get(item.id);
-          if (currentItem) {
-            this.items.set(item.id, {
-              ...currentItem,
-              progress: progress.progress,
-              downloadedSize: progress.downloadedSize,
-              fileSize: progress.totalSize || currentItem.fileSize,
-              speed: progress.speed,
-              eta: progress.eta,
-              lastUpdatedAt: Date.now()
-            });
-          }
+        if (!this.isCurrentProcess(item.id, generation)) {
+          continue;
+        }
+
+        activeDownload.lastProgressTime = Date.now();
+        this.emitProgress(item.id, progress);
+
+        // Update item progress
+        const currentItem = this.items.get(item.id);
+        if (currentItem) {
+          this.items.set(item.id, {
+            ...currentItem,
+            progress: progress.progress,
+            downloadedSize: progress.downloadedSize,
+            fileSize: progress.totalSize || currentItem.fileSize,
+            speed: progress.speed,
+            eta: progress.eta,
+            lastUpdatedAt: Date.now()
+          });
         }
       }
     });
@@ -368,6 +462,10 @@ export class NativeDownloadService extends EventEmitter {
 
     // Handle process exit
     proc.on("exit", (code) => {
+      if (!this.isCurrentProcess(item.id, generation)) {
+        return;
+      }
+
       this.activeDownloads.delete(item.id);
 
       if (code === 0) {
@@ -396,9 +494,9 @@ export class NativeDownloadService extends EventEmitter {
                   });
                   this.emitStateChange(item.id, "completed");
                 }
-              }, 500);
+              }, 100);
             }
-          }, 500);
+          }, 100);
         }
       } else {
         // Failure - map error
@@ -418,6 +516,10 @@ export class NativeDownloadService extends EventEmitter {
 
     // Handle spawn errors
     proc.on("error", (err: any) => {
+      if (!this.isCurrentProcess(item.id, generation)) {
+        return;
+      }
+
       this.activeDownloads.delete(item.id);
 
       let errorCode: import('../../src/types/errors').AppErrorCode = "ytdlp_error";
@@ -510,9 +612,8 @@ export class NativeDownloadService extends EventEmitter {
       throw new Error(`Download item not found: ${id}`);
     }
 
-    // Check concurrent downloads limit (count only actively downloading items, not analyzing)
     const activeCount = Array.from(this.items.values()).filter((i) =>
-      ["downloading", "merging", "converting"].includes(i.status)
+      i.id !== id && ["downloading", "retrying", "merging", "converting"].includes(i.status)
     ).length;
 
     if (activeCount >= this.settings.concurrentDownloads) {
@@ -554,12 +655,16 @@ export class NativeDownloadService extends EventEmitter {
       // Kill process cleanly (SIGTERM on Unix, close on Windows)
       activeDownload.process.kill();
       this.activeDownloads.delete(id);
+      this.nextProcessGeneration(id);
     }
 
-    // Update status to paused
+    // Update status to paused while preserving the last valid progress snapshot
+    const currentItem = this.items.get(id);
     this.updateItemStatus(id, "paused", {
       speed: 0,
-      eta: "--"
+      eta: "--",
+      progress: currentItem?.progress ?? 0,
+      downloadedSize: currentItem?.downloadedSize ?? 0
     });
     this.emitStateChange(id, "paused");
 
@@ -579,9 +684,8 @@ export class NativeDownloadService extends EventEmitter {
       throw new Error(`Cannot resume download in status: ${item.status}`);
     }
 
-    // Check concurrent downloads limit
     const activeCount = Array.from(this.items.values()).filter((i) =>
-      ["analyzing", "downloading", "merging", "converting"].includes(i.status)
+      i.id !== id && ["downloading", "retrying", "merging", "converting"].includes(i.status)
     ).length;
 
     if (activeCount >= this.settings.concurrentDownloads) {
@@ -623,16 +727,20 @@ export class NativeDownloadService extends EventEmitter {
       // Kill process
       activeDownload.process.kill();
       this.activeDownloads.delete(id);
+      this.nextProcessGeneration(id);
 
       // Optionally delete partial files
       // Note: We keep .part files for now (user may want to retry)
       // In future, we can add a setting "deletePartialFilesOnCancel"
     }
 
-    // Update status to canceled
+    // Update status to canceled while preserving the last valid snapshot
+    const currentItem = this.items.get(id);
     this.updateItemStatus(id, "canceled", {
       speed: 0,
-      eta: "--"
+      eta: "--",
+      progress: currentItem?.progress ?? 0,
+      downloadedSize: currentItem?.downloadedSize ?? 0
     });
     this.emitStateChange(id, "canceled");
 
@@ -652,28 +760,34 @@ export class NativeDownloadService extends EventEmitter {
       throw new Error(`Cannot retry download in status: ${item.status}`);
     }
 
-    // Update to retrying status
-    this.updateItemStatus(id, "retrying", {
+    const activeCount = Array.from(this.items.values()).filter((i) =>
+      i.id !== id && ["downloading", "retrying", "merging", "converting"].includes(i.status)
+    ).length;
+
+    if (activeCount >= this.settings.concurrentDownloads) {
+      throw new Error("Concurrent download limit reached");
+    }
+
+    const resetItem: DownloadItem = {
+      ...item,
+      status: "retrying",
       progress: 0,
       downloadedSize: 0,
       speed: 0,
       eta: "--",
       retryCount: item.retryCount + 1,
       errorCode: undefined,
-      errorMessage: undefined
-    });
+      errorMessage: undefined,
+      lastUpdatedAt: Date.now()
+    };
+    this.items.set(id, resetItem);
     this.emitStateChange(id, "retrying");
 
-    // Transition to analyzing (queue will handle starting automatically)
     setTimeout(() => {
-      const currentItem = this.items.get(id);
-      if (currentItem && currentItem.status === "retrying") {
-        this.updateItemStatus(id, "analyzing");
-        this.emitStateChange(id, "analyzing");
-      }
-    }, 300);
+      void this.spawnDownload(resetItem, false);
+    }, 0);
 
-    return this.items.get(id)!;
+    return this.items.get(id) ?? resetItem;
   }
 
   /**
@@ -707,7 +821,7 @@ export class NativeDownloadService extends EventEmitter {
    */
   getActiveCount(): number {
     return Array.from(this.items.values()).filter((i) =>
-      ["analyzing", "downloading", "merging", "converting"].includes(i.status)
+      ["downloading", "retrying", "merging", "converting"].includes(i.status)
     ).length;
   }
 

@@ -16,6 +16,10 @@ var IPC_CHANNELS = {
   SETTINGS_GET: "settings:get",
   SETTINGS_UPDATE: "settings:update",
   SETTINGS_RESET: "settings:reset",
+  SETTINGS_SELECT_DOWNLOAD_FOLDER: "settings:select-download-folder",
+  WINDOW_MINIMIZE: "window:minimize",
+  WINDOW_CLOSE: "window:close",
+  DOWNLOAD_OPEN_FOLDER: "download:open-folder",
   HISTORY_GET_ALL: "history:get-all",
   HISTORY_ADD: "history:add",
   HISTORY_REMOVE: "history:remove",
@@ -67,12 +71,18 @@ var electronAPI = {
       const listener = (_event, data) => callback(data);
       import_electron.ipcRenderer.on(IPC_EVENTS.DOWNLOAD_STATE_CHANGE, listener);
       return () => import_electron.ipcRenderer.removeListener(IPC_EVENTS.DOWNLOAD_STATE_CHANGE, listener);
-    }
+    },
+    openFolder: (path) => invoke(IPC_CHANNELS.DOWNLOAD_OPEN_FOLDER, { path })
   },
   settings: {
     get: () => invoke(IPC_CHANNELS.SETTINGS_GET),
     update: (settings) => invoke(IPC_CHANNELS.SETTINGS_UPDATE, { settings }),
-    reset: () => invoke(IPC_CHANNELS.SETTINGS_RESET)
+    reset: () => invoke(IPC_CHANNELS.SETTINGS_RESET),
+    selectDownloadFolder: () => invoke(IPC_CHANNELS.SETTINGS_SELECT_DOWNLOAD_FOLDER)
+  },
+  window: {
+    minimize: () => invoke(IPC_CHANNELS.WINDOW_MINIMIZE),
+    close: () => invoke(IPC_CHANNELS.WINDOW_CLOSE)
   },
   history: {
     getAll: () => invoke(IPC_CHANNELS.HISTORY_GET_ALL),

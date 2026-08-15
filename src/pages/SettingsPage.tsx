@@ -43,6 +43,22 @@ export function SettingsPage() {
     toast.success(t("settings.toast.reset"));
   }
 
+  async function handleSelectDownloadFolder() {
+    if (typeof window !== "undefined" && window.electronAPI?.settings?.selectDownloadFolder) {
+      try {
+        const folder = await window.electronAPI.settings.selectDownloadFolder();
+        if (folder) {
+          update("downloadFolder", folder);
+        }
+        return;
+      } catch (error) {
+        console.error("[SettingsPage] Failed to select download folder:", error);
+      }
+    }
+
+    toast.info(t("settings.toast.folderPickerUnavailable"));
+  }
+
   return (
     <section className="space-y-5">
       <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:flex-row sm:items-center sm:justify-between">
@@ -62,11 +78,22 @@ export function SettingsPage() {
 
       <div className="grid gap-5 xl:grid-cols-2">
         <SettingsSection title={t("settings.sections.general")}>
-          <TextField
-            label={t("settings.downloadFolder")}
-            value={settings.downloadFolder}
-            onChange={(value) => update("downloadFolder", value)}
-          />
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <TextField
+                label={t("settings.downloadFolder")}
+                value={settings.downloadFolder}
+                onChange={(value) => update("downloadFolder", value)}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={handleSelectDownloadFolder}
+              className="mt-7 inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              {t("settings.browse")}
+            </button>
+          </div>
           <Toggle
             label={t("settings.startWithWindows")}
             checked={settings.startWithWindows}

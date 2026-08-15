@@ -185,8 +185,13 @@ function parseVideoMetadata(
     .sort((a, b) => b - a)
     .map((h) => `${h}p`);
 
-  const videoFormats = new Set(formats.map((f) => f.ext).filter((ext): ext is string => !!ext));
-  const audioFormats = new Set<string>(["m4a", "mp3", "opus"]); // yt-dlp default audio formats
+  const videoFormats = new Set(
+    formats
+      .map((f) => f.ext)
+      .filter((ext): ext is string => !!ext)
+      .filter((ext) => ["mp4", "webm", "mkv"].includes(ext))
+  );
+  const audioFormats = new Set<string>(["mp3", "opus"]);
 
   // Best format info
   const bestFormat = formats.find((f) => f.height && f.height > 0) ?? formats[0];

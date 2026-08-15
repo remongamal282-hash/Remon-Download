@@ -13,7 +13,7 @@ import {
   useSortable,
   verticalListSortingStrategy
 } from "@dnd-kit/sortable";
-import { AlertTriangle, GripVertical, Pause, Play, RotateCcw, Trash2, XCircle } from "lucide-react";
+import { AlertTriangle, FolderOpen, GripVertical, Pause, Play, RotateCcw, Trash2, XCircle } from "lucide-react";
 import { useEffect } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -156,6 +156,7 @@ export function QueuePage() {
 
 function QueueRow({ item }: { item: DownloadItem }) {
   const { t } = useTranslation();
+  const settings = useSettingsStore((state) => state.settings);
   const pause = useQueueStore((state) => state.pause);
   const resume = useQueueStore((state) => state.resume);
   const cancel = useQueueStore((state) => state.cancel);
@@ -236,18 +237,22 @@ function QueueRow({ item }: { item: DownloadItem }) {
           ) : null}
         </div>
         <div className="flex flex-wrap justify-start gap-2 lg:justify-end">
+          <IconButton
+            label={t("queue.openFolder")}
+            onClick={async () => {
+              if (typeof window !== "undefined" && window.electronAPI?.download?.openFolder) {
+                await window.electronAPI.download.openFolder(settings.downloadFolder);
+                return;
+              }
+              toast.info(t("history.toast.openFolderMock"));
+            }}
+            icon={<FolderOpen size={16} />}
+          />
           <IconButton label={t("queue.pause")} disabled={!canPause} onClick={() => pause(item.id)} icon={<Pause size={16} />} />
           <IconButton label={t("queue.resume")} disabled={!canResume} onClick={() => resume(item.id)} icon={<Play size={16} />} />
           <IconButton label={t("queue.cancel")} disabled={!canCancel} onClick={() => cancel(item.id)} icon={<XCircle size={16} />} />
           <IconButton label={t("queue.retry")} disabled={!canRetry} onClick={() => retry(item.id)} icon={<RotateCcw size={16} />} />
           <IconButton label={t("queue.remove")} onClick={() => remove(item.id)} icon={<Trash2 size={16} />} />
-          {import.meta.env.DEV ? (
-            <MockErrorControl
-              disabled={!canSimulateError}
-              onSimulate={(code) => simulateError(item.id, code)}
-              title={item.title}
-            />
-          ) : null}
         </div>
       </div>
     </article>

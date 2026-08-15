@@ -1,5 +1,5 @@
-import { Check, Loader2, Plus } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Check, Loader2, Plus, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -20,16 +20,68 @@ export function DashboardPage() {
   const addManyFromMetadata = useQueueStore((state) => state.addManyFromMetadata);
   const settings = useSettingsStore((state) => state.settings);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedQuality, setSelectedQuality] = useState(settings.defaultQuality);
+  const [selectedFormat, setSelectedFormat] = useState(settings.defaultVideoFormat);
+
+  useEffect(() => {
+    if (!result || result.linkType === "playlist" || result.linkType === "channel") {
+      return;
+    }
+
+    const validVideoFormats = ["mp4", "mp3", "webm", "mkv"];
+    const normalizedFormats = Array.from(
+      new Set([
+        ...validVideoFormats.filter((format) => result.videoFormats.includes(format) || format === "mp3"),
+        ...result.videoFormats.filter((format) => !["mhtml", "m4a"].includes(format))
+      ])
+    );
+
+    const nextQuality = result.qualityOptions.includes(settings.defaultQuality)
+      ? settings.defaultQuality
+      : result.qualityOptions[0] ?? settings.defaultQuality;
+    const fallbackFormat = normalizedFormats[0] ?? "mp4";
+    const nextFormat = normalizedFormats.includes(settings.defaultVideoFormat)
+      ? settings.defaultVideoFormat
+      : fallbackFormat;
+
+    setSelectedQuality(nextQuality);
+    setSelectedFormat(nextFormat);
+  }, [result, settings.defaultQuality, settings.defaultVideoFormat]);
 
   const {
     register,
     handleSubmit,
+    watch,
+    setValue,
+    resetField,
     formState: { errors }
   } = useForm<QuickAddFormValues>({
     defaultValues: {
       url: ""
     }
   });
+
+  const watchedUrl = watch("url");
+  const lastAutoAnalyzedUrlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const nextUrl = watchedUrl?.trim() ?? "";
+    if (!nextUrl) {
+      return;
+    }
+
+    const validation = quickAddSchema.safeParse({ url: nextUrl });
+    if (!validation.success) {
+      return;
+    }
+
+    if (lastAutoAnalyzedUrlRef.current === nextUrl) {
+      return;
+    }
+
+    lastAutoAnalyzedUrlRef.current = nextUrl;
+    void onSubmit({ url: nextUrl });
+  }, [watchedUrl]);
 
   const selectableVideos = useMemo(() => {
     if (!result) {
@@ -58,8 +110,8 @@ export function DashboardPage() {
     }
   }
 
-  function addSingle(video: VideoMetadata) {
-    addFromMetadata(video, settings.defaultQuality, settings.defaultVideoFormat);
+  function addSingle(video: VideoMetadata, quality = selectedQuality, format = selectedFormat) {
+    addFromMetadata(video, quality, format);
     toast.success(t("toast.addedToQueue"));
   }
 
@@ -81,22 +133,22 @@ export function DashboardPage() {
   }
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <section className="space-y-6">
-        <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-          <h1 className="text-2xl font-semibold">{t("dashboard.title")}</h1>
-          <p className="mt-2 max-w-2xl text-sm text-slate-600 dark:text-slate-300">
-            {t("dashboard.subtitle")}
-          </p>
-          <form className="mt-6 flex flex-col gap-3 lg:flex-row" onSubmit={handleSubmit(onSubmit)}>
-            <div className="min-w-0 flex-1">
-              <label htmlFor="quick-url" className="text-sm font-medium">
-                {t("dashboard.urlLabel")}
-              </label>
+    <section className="space-y-6">
+      <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <h1 className="text-2xl font-semibold">{t("dashboard.title")}</h1>
+        <p className="mt-2 max-w-2xl text-sm text-slate-600 dark:text-slate-300">
+          {t("dashboard.subtitle")}
+        </p>
+        <form className="mt-6 flex flex-col gap-3 lg:flex-row" onSubmit={handleSubmit(onSubmit)}>
+          <div className="min-w-0 flex-1">
+            <label htmlFor="quick-url" className="text-sm font-medium">
+              {t("dashboard.urlLabel")}
+            </label>
+            <div className="relative mt-2">
               <input
                 id="quick-url"
                 type="url"
-                className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
+                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 pr-10 text-sm text-slate-950 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
                 placeholder={t("dashboard.urlPlaceholder")}
                 aria-invalid={errors.url ? "true" : "false"}
                 {...register("url", {
@@ -106,71 +158,88 @@ export function DashboardPage() {
                   }
                 })}
               />
-              {errors.url ? (
-                <p className="mt-2 text-sm text-red-600 dark:text-red-400">{t(errors.url.message ?? "")}</p>
-              ) : null}
-              {error ? (
-                <p className="mt-2 text-sm text-red-600 dark:text-red-400">{t(error.message)}</p>
+              {watchedUrl ? (
+                <button
+                  type="button"
+                  aria-label={t("dashboard.clearUrl") || "Clear URL"}
+                  title={t("dashboard.clearUrl") || "Clear URL"}
+                  onClick={() => {
+                    resetField("url");
+                    setValue("url", "", { shouldValidate: true, shouldDirty: true });
+                  }}
+                  className="absolute right-2 top-1/2 inline-flex -translate-y-1/2 items-center justify-center rounded-md p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100"
+                >
+                  <X aria-hidden="true" size={16} />
+                </button>
               ) : null}
             </div>
-            <button
-              type="submit"
-              disabled={isAnalyzing}
-              className="mt-7 inline-flex h-10 items-center justify-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              {isAnalyzing ? <Loader2 aria-hidden="true" className="animate-spin" size={18} /> : <Plus aria-hidden="true" size={18} />}
-              {isAnalyzing ? t("dashboard.analyzing") : t("dashboard.analyze")}
-            </button>
-          </form>
-        </div>
+            {errors.url ? (
+              <p className="mt-2 text-sm text-red-600 dark:text-red-400">{t(errors.url.message ?? "")}</p>
+            ) : null}
+            {error ? (
+              <p className="mt-2 text-sm text-red-600 dark:text-red-400">{t(error.message)}</p>
+            ) : null}
+          </div>
+          <button
+            type="submit"
+            disabled={isAnalyzing}
+            className="mt-7 inline-flex h-10 items-center justify-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {isAnalyzing ? <Loader2 aria-hidden="true" className="animate-spin" size={18} /> : <Plus aria-hidden="true" size={18} />}
+            {isAnalyzing ? t("dashboard.analyzing") : t("dashboard.analyze")}
+          </button>
+        </form>
+      </div>
 
-        {isAnalyzing ? <DashboardSkeleton /> : null}
-        {result && !isAnalyzing ? (
-          <AnalysisPanel
-            result={result}
-            selectedIds={selectedIds}
-            onToggleSelected={toggleSelected}
-            onSelectAll={() => setSelectedIds(selectableVideos.map((video) => video.id))}
-            onDeselectAll={() => setSelectedIds([])}
-            onAddSingle={addSingle}
-            onAddSelected={addSelected}
-            onAddAll={addAll}
-          />
-        ) : null}
-      </section>
-
-      <aside className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <h2 className="text-base font-semibold">{t("dashboard.videoInfo")}</h2>
-        {result && result.linkType !== "playlist" && result.linkType !== "channel" ? (
-          <VideoInfo video={result} />
-        ) : (
-          <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">{t("common.empty")}</p>
-        )}
-      </aside>
-    </div>
+      {isAnalyzing ? <DashboardSkeleton /> : null}
+      {result && !isAnalyzing ? (
+        <AnalysisPanel
+          result={result}
+          selectedIds={selectedIds}
+          selectedQuality={selectedQuality}
+          selectedFormat={selectedFormat}
+          onToggleSelected={toggleSelected}
+          onSelectAll={() => setSelectedIds(selectableVideos.map((video) => video.id))}
+          onDeselectAll={() => setSelectedIds([])}
+          onAddSingle={addSingle}
+          onAddSelected={addSelected}
+          onAddAll={addAll}
+          onQualityChange={setSelectedQuality}
+          onFormatChange={setSelectedFormat}
+        />
+      ) : null}
+    </section>
   );
 }
 
 interface AnalysisPanelProps {
   result: AnalysisResult;
   selectedIds: string[];
+  selectedQuality: string;
+  selectedFormat: string;
   onToggleSelected: (videoId: string) => void;
   onSelectAll: () => void;
   onDeselectAll: () => void;
-  onAddSingle: (video: VideoMetadata) => void;
+  onAddSingle: (video: VideoMetadata, quality?: string, format?: string) => void;
   onAddSelected: () => void;
   onAddAll: () => void;
+  onQualityChange: (quality: string) => void;
+  onFormatChange: (format: string) => void;
 }
 
 function AnalysisPanel({
   result,
   selectedIds,
+  selectedQuality,
+  selectedFormat,
   onToggleSelected,
   onSelectAll,
   onDeselectAll,
   onAddSingle,
   onAddSelected,
-  onAddAll
+  onAddAll,
+  onQualityChange,
+  onFormatChange
 }: AnalysisPanelProps) {
   const { t } = useTranslation();
 
@@ -210,6 +279,14 @@ function AnalysisPanel({
     );
   }
 
+  const validVideoFormats = ["mp4", "mp3", "webm", "mkv"];
+  const normalizedVideoFormats = Array.from(
+    new Set([
+      ...validVideoFormats.filter((format) => result.videoFormats.includes(format) || format === "mp3"),
+      ...result.videoFormats.filter((format) => !["mhtml", "m4a"].includes(format))
+    ])
+  );
+
   return (
     <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="flex gap-4">
@@ -225,9 +302,39 @@ function AnalysisPanel({
               {t("dashboard.playlistVideoNotice")}
             </p>
           ) : null}
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-200">
+              <span className="mb-2 block">Quality</span>
+              <select
+                value={selectedQuality}
+                onChange={(event) => onQualityChange(event.target.value)}
+                className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
+              >
+                {(result.qualityOptions.length ? result.qualityOptions : [selectedQuality]).map((quality) => (
+                  <option key={quality} value={quality}>
+                    {quality}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm font-medium text-slate-700 dark:text-slate-200">
+              <span className="mb-2 block">Format</span>
+              <select
+                value={selectedFormat}
+                onChange={(event) => onFormatChange(event.target.value)}
+                className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
+              >
+                {(normalizedVideoFormats.length ? normalizedVideoFormats : [selectedFormat]).map((format) => (
+                  <option key={format} value={format}>
+                    {format}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <button
             type="button"
-            onClick={() => onAddSingle(result)}
+            onClick={() => onAddSingle(result, selectedQuality, selectedFormat)}
             className="mt-4 inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
           >
             <Check aria-hidden="true" size={18} />
