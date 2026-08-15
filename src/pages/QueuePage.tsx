@@ -59,8 +59,8 @@ export function QueuePage() {
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
-      tick(settings.concurrentDownloads, settings.speedLimit);
-    }, Math.max(100, 700 / simulationSpeed));
+      tick(settings.concurrentDownloads, settings.speedLimit, Date.now());
+    }, Math.max(700, 1000 / simulationSpeed));
 
     return () => window.clearInterval(intervalId);
   }, [settings.concurrentDownloads, settings.speedLimit, simulationSpeed, tick]);

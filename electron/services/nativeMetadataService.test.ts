@@ -48,11 +48,10 @@ class MockChildProcess extends EventEmitter {
 class MockProcessExecutor implements ProcessExecutor {
   public spawnCalls: Array<{ command: string; args: string[]; options?: any }> = [];
   public accessCalls: Array<{ path: string; mode: number }> = [];
-
-  private spawnBehavior: ((command: string, args: string[]) => ChildProcess) | null = null;
+  private spawnBehavior: ((command: string, args: string[]) => any) | null = null;
   private accessBehavior: ((path: string, mode: number) => Promise<void>) | null = null;
 
-  setSpawnBehavior(fn: (command: string, args: string[]) => ChildProcess) {
+  setSpawnBehavior(fn: (command: string, args: string[]) => any) {
     this.spawnBehavior = fn;
   }
 
@@ -304,7 +303,7 @@ describe("NativeMetadataService — yt-dlp Integration", () => {
       const result = await service.analyze("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
 
       expect(result.linkType).toBe("video");
-      expect(result.title).toBe("Rick Astley - Never Gonna Give You Up");
+      expect((result as any).title).toBe("Rick Astley - Never Gonna Give You Up");
       expect(result).toMatchObject({
         linkType: "video",
         channelName: "Rick Astley",
@@ -348,7 +347,7 @@ describe("NativeMetadataService — yt-dlp Integration", () => {
       const result = await service.analyze("https://www.youtube.com/shorts/abc123xyz");
 
       expect(result.linkType).toBe("shorts");
-      expect(result.title).toBe("Amazing Short Video");
+      expect((result as any).title).toBe("Amazing Short Video");
       expect(result).toMatchObject({
         linkType: "shorts",
         duration: "0:45"

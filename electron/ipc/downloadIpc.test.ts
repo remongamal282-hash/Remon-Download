@@ -266,7 +266,7 @@ describe("Download IPC Integration", () => {
   describe("IPC handler responses", () => {
     it("should return IpcResult envelope on success", async () => {
       const item = createMockDownloadItem();
-      const result = await simulateHandler(IPC_CHANNELS.DOWNLOAD_ADD, { item }, service);
+      const result = await simulateHandler<DownloadItem>(IPC_CHANNELS.DOWNLOAD_ADD, { item }, service);
 
       expect(result.success).toBe(true);
       if (result.success) {

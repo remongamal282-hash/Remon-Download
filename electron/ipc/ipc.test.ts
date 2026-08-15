@@ -116,7 +116,7 @@ describe("Preload API surface — window.electronAPI contract", () => {
   it("window.electronAPI is undefined in Vitest (no preload injected)", () => {
     // In Vitest/JSDOM, no preload runs — window.electronAPI must be absent.
     expect(typeof window).toBe("object");
-    expect((window as Record<string, unknown>).electronAPI).toBeUndefined();
+    expect((window as unknown as Record<string, unknown>).electronAPI).toBeUndefined();
   });
 
   it("isElectronEnvironment() returns false in Vitest", () => {
@@ -125,10 +125,10 @@ describe("Preload API surface — window.electronAPI contract", () => {
 
   it("a simulated preload injection is detected by isElectronEnvironment()", () => {
     // Simulate what contextBridge.exposeInMainWorld would inject
-    (window as Record<string, unknown>).electronAPI = { isElectron: true };
+    (window as unknown as Record<string, unknown>).electronAPI = { isElectron: true };
     expect(isElectronEnvironment()).toBe(true);
     // Clean up
-    delete (window as Record<string, unknown>).electronAPI;
+    delete (window as unknown as Record<string, unknown>).electronAPI;
     expect(isElectronEnvironment()).toBe(false);
   });
 });
@@ -138,7 +138,7 @@ describe("Preload API surface — window.electronAPI contract", () => {
 describe("serviceResolver — dual-mode selection", () => {
   beforeEach(() => {
     // Remove any simulated electronAPI and reset singleton cache
-    delete (window as Record<string, unknown>).electronAPI;
+    delete (window as unknown as Record<string, unknown>).electronAPI;
     _resetServiceCache();
   });
 
@@ -224,7 +224,8 @@ describe("error propagation — wrapError simulation", () => {
       if (!result.success) {
         throw new Error(result.error.message);
       }
-      return result.data;
+      const data = (result as Extract<IpcResult<string>, { success: true }>).data;
+      return data;
     }
 
     return expect(rendererInvoke()).rejects.toThrow("main process crashed");
@@ -238,21 +239,21 @@ describe("security constraints — renderer has no Node.js access", () => {
     // In Vitest with jsdom environment, require is available as part of the
     // Vitest module system, but window.require (what Electron would expose
     // when nodeIntegration:true) must not exist.
-    expect((window as Record<string, unknown>).require).toBeUndefined();
+    expect((window as unknown as Record<string, unknown>).require).toBeUndefined();
   });
 
   it("window.electronAPI is undefined unless preload injects it", () => {
     // Confirm the baseline — no preload has run in JSDOM
-    expect((window as Record<string, unknown>).electronAPI).toBeUndefined();
+    expect((window as unknown as Record<string, unknown>).electronAPI).toBeUndefined();
   });
 
   it("window.electronAPI is boolean-detectable after simulated injection", () => {
     // Simulate what contextBridge.exposeInMainWorld('electronAPI', ...) does
-    (window as Record<string, unknown>).electronAPI = { isElectron: true };
-    const api = (window as Record<string, unknown>).electronAPI as { isElectron: boolean };
+    (window as unknown as Record<string, unknown>).electronAPI = { isElectron: true };
+    const api = (window as unknown as Record<string, unknown>).electronAPI as { isElectron: boolean };
     expect(api.isElectron).toBe(true);
     // Clean up
-    delete (window as Record<string, unknown>).electronAPI;
+    delete (window as unknown as Record<string, unknown>).electronAPI;
   });
 
   it("Electron main process security config — contextIsolation must be true (documented constant)", () => {

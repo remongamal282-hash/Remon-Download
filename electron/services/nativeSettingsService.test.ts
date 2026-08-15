@@ -19,7 +19,7 @@ describe('NativeSettingsService', () => {
     mockReadJsonFile = vi.mocked(fileStorage.readJsonFile);
     mockWriteJsonFile = vi.mocked(fileStorage.writeJsonFile);
 
-    // Default: return DEFAULT_SETTINGS
+    // Default: return DEFAULT_SETTINGS wrapped in file format
     mockReadJsonFile.mockResolvedValue({
       version: '1.0.0',
       data: DEFAULT_SETTINGS,
@@ -29,15 +29,14 @@ describe('NativeSettingsService', () => {
     service = new NativeSettingsService();
   });
 
+  // ─── initialization ───────────────────────────────────────────────────────
+
   describe('initialization', () => {
-    it('should load settings from file on construction', async () => {
+    it('should load settings from file on initialize()', async () => {
       const customSettings: AppSettings = {
         ...DEFAULT_SETTINGS,
-        downloads: {
-          ...DEFAULT_SETTINGS.downloads,
-          savePath: 'C:\\Custom\\Downloads',
-          quality: '1080p',
-        },
+        downloadFolder: 'C:\\Custom\\Downloads',
+        defaultQuality: '1080p',
       };
 
       mockReadJsonFile.mockResolvedValue({
@@ -54,10 +53,11 @@ describe('NativeSettingsService', () => {
       });
 
       const settings = await newService.get();
-      expect(settings).toEqual(customSettings);
+      expect(settings.downloadFolder).toBe('C:\\Custom\\Downloads');
+      expect(settings.defaultQuality).toBe('1080p');
     });
 
-    it('should start with default settings if file does not exist', async () => {
+    it('should start with DEFAULT_SETTINGS if file does not exist', async () => {
       mockReadJsonFile.mockResolvedValue({
         version: '1.0.0',
         data: DEFAULT_SETTINGS,
@@ -70,64 +70,102 @@ describe('NativeSettingsService', () => {
       expect(settings).toEqual(DEFAULT_SETTINGS);
     });
 
-    it('should handle file read errors gracefully', async () => {
+    it('should merge missing keys from DEFAULT_SETTINGS (handles new settings added in upgrades)', async () => {
+      // Simulate old settings file missing new keys
+      const partialSettings: Partial<AppSettings> = {
+        downloadFolder: 'C:\\Old\\Downloads',
+        language: 'ar',
+      };
+
+      mockReadJsonFile.mockResolvedValue({ version: '1.0.0', data: partialSettings });
+
+      const newService = new NativeSettingsService();
+      await newService.initialize();
+
+      const settings = await newService.get();
+      // Known key from file is preserved
+      expect(settings.downloadFolder).toBe('C:\\Old\\Downloads');
+      expect(settings.language).toBe('ar');
+      // New/missing keys filled from defaults
+      expect(settings.concurrentDownloads).toBe(DEFAULT_SETTINGS.concurrentDownloads);
+      expect(settings.defaultQuality).toBe(DEFAULT_SETTINGS.defaultQuality);
+    });
+
+    it('should fall back to DEFAULT_SETTINGS for corrupted/non-object JSON', async () => {
+      // Non-{ version, data } structure
+      mockReadJsonFile.mockResolvedValue('corrupted string' as unknown as { version: string; data: AppSettings });
+
+      const newService = new NativeSettingsService();
+      await newService.initialize();
+
+      const settings = await newService.get();
+      expect(settings).toEqual(DEFAULT_SETTINGS);
+    });
+
+    it('should handle file read errors by propagating', async () => {
       mockReadJsonFile.mockRejectedValue(new Error('Permission denied'));
 
       const newService = new NativeSettingsService();
-
       await expect(newService.initialize()).rejects.toThrow('Permission denied');
     });
+
+    it('should be idempotent — calling initialize() twice reads file only once', async () => {
+      const newService = new NativeSettingsService();
+      mockReadJsonFile.mockClear();
+      await newService.initialize();
+      await newService.initialize();
+
+      expect(mockReadJsonFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('should lazy-initialize on first get() without explicit initialize()', async () => {
+      const newService = new NativeSettingsService();
+      mockReadJsonFile.mockClear();
+      const settings = await newService.get();
+      expect(settings).toEqual(DEFAULT_SETTINGS);
+      expect(mockReadJsonFile).toHaveBeenCalledTimes(1);
+    });
   });
+
+  // ─── get ─────────────────────────────────────────────────────────────────
 
   describe('get', () => {
     it('should return current settings', async () => {
       const customSettings: AppSettings = {
         ...DEFAULT_SETTINGS,
-        downloads: {
-          ...DEFAULT_SETTINGS.downloads,
-          savePath: 'C:\\Custom\\Downloads',
-        },
+        downloadFolder: 'C:\\Custom\\Downloads',
       };
 
-      mockReadJsonFile.mockResolvedValue({
-        version: '1.0.0',
-        data: customSettings,
-      });
+      mockReadJsonFile.mockResolvedValue({ version: '1.0.0', data: customSettings });
       await service.initialize();
 
       const settings = await service.get();
-
-      expect(settings).toEqual(customSettings);
+      expect(settings.downloadFolder).toBe('C:\\Custom\\Downloads');
     });
 
-    it('should return a copy of settings', async () => {
+    it('should return a copy (not the same object reference)', async () => {
       await service.initialize();
 
-      const settings1 = await service.get();
-      const settings2 = await service.get();
+      const s1 = await service.get();
+      const s2 = await service.get();
 
-      expect(settings1).toEqual(settings2);
-      expect(settings1).not.toBe(settings2); // Different object instances
+      expect(s1).toEqual(s2);
+      expect(s1).not.toBe(s2);
     });
   });
 
+  // ─── update ───────────────────────────────────────────────────────────────
+
   describe('update', () => {
-    it('should update settings partially and persist to file', async () => {
+    it('should apply a partial patch and persist', async () => {
       await service.initialize();
 
-      const patch: Partial<AppSettings> = {
-        downloads: {
-          ...DEFAULT_SETTINGS.downloads,
-          savePath: 'C:\\Custom\\Downloads',
-          quality: '1080p',
-        },
-      };
+      const result = await service.update({ downloadFolder: 'C:\\Custom\\Downloads', defaultQuality: '1080p' });
 
-      const result = await service.update(patch);
-
-      expect(result.downloads.savePath).toBe('C:\\Custom\\Downloads');
-      expect(result.downloads.quality).toBe('1080p');
-      expect(result.appearance).toEqual(DEFAULT_SETTINGS.appearance); // Other sections unchanged
+      expect(result.downloadFolder).toBe('C:\\Custom\\Downloads');
+      expect(result.defaultQuality).toBe('1080p');
+      // Un-patched keys remain unchanged
+      expect(result.language).toBe(DEFAULT_SETTINGS.language);
 
       expect(mockWriteJsonFile).toHaveBeenCalledWith(
         'settings.json',
@@ -138,103 +176,56 @@ describe('NativeSettingsService', () => {
       );
     });
 
-    it('should merge partial updates with existing settings', async () => {
+    it('should accumulate multiple patches', async () => {
       await service.initialize();
 
-      // First update
-      await service.update({
-        downloads: {
-          ...DEFAULT_SETTINGS.downloads,
-          savePath: 'C:\\Downloads1',
-        },
-      });
+      await service.update({ downloadFolder: 'C:\\Downloads1' });
+      const result = await service.update({ defaultQuality: '1080p' });
 
-      // Second update (different field)
-      const result = await service.update({
-        downloads: {
-          ...DEFAULT_SETTINGS.downloads,
-          quality: '1080p',
-        },
-      });
-
-      // Both updates should be present (quality updated, savePath reset to default because we sent full downloads object)
-      expect(result.downloads.quality).toBe('1080p');
+      expect(result.downloadFolder).toBe('C:\\Downloads1');
+      expect(result.defaultQuality).toBe('1080p');
     });
 
-    it('should persist to file after updating', async () => {
+    it('should persist exactly once per update call', async () => {
       await service.initialize();
-
-      // Clear mock call history after initialize
       mockWriteJsonFile.mockClear();
 
-      await service.update({
-        downloads: {
-          ...DEFAULT_SETTINGS.downloads,
-          savePath: 'C:\\Custom\\Downloads',
-        },
-      });
+      await service.update({ downloadFolder: 'C:\\Custom\\Downloads' });
 
       expect(mockWriteJsonFile).toHaveBeenCalledTimes(1);
     });
   });
 
+  // ─── reset ────────────────────────────────────────────────────────────────
+
   describe('reset', () => {
-    it('should reset to default settings and persist to file', async () => {
+    it('should reset to DEFAULT_SETTINGS and persist', async () => {
       await service.initialize();
 
-      // First update to custom settings
-      await service.update({
-        downloads: {
-          ...DEFAULT_SETTINGS.downloads,
-          savePath: 'C:\\Custom\\Downloads',
-          quality: '1080p',
-        },
-      });
+      await service.update({ downloadFolder: 'C:\\Custom\\Downloads', defaultQuality: '1080p' });
 
-      // Reset
       const result = await service.reset();
 
       expect(result).toEqual(DEFAULT_SETTINGS);
-
       expect(mockWriteJsonFile).toHaveBeenCalledWith('settings.json', {
         version: '1.0.0',
         data: DEFAULT_SETTINGS,
       });
     });
 
-    it('should persist to file after resetting', async () => {
+    it('should persist exactly once per reset call', async () => {
       await service.initialize();
-
-      // Update to custom settings
-      await service.update({
-        downloads: {
-          ...DEFAULT_SETTINGS.downloads,
-          savePath: 'C:\\Custom\\Downloads',
-        },
-      });
-
-      // Clear mock call history
+      await service.update({ downloadFolder: 'C:\\Custom\\Downloads' });
       mockWriteJsonFile.mockClear();
 
       await service.reset();
 
       expect(mockWriteJsonFile).toHaveBeenCalledTimes(1);
-      expect(mockWriteJsonFile).toHaveBeenCalledWith('settings.json', {
-        version: '1.0.0',
-        data: DEFAULT_SETTINGS,
-      });
     });
 
-    it('should return default settings after reset', async () => {
+    it('should return DEFAULT_SETTINGS from subsequent get() after reset', async () => {
       await service.initialize();
-
-      await service.update({
-        downloads: {
-          ...DEFAULT_SETTINGS.downloads,
-          savePath: 'C:\\Custom\\Downloads',
-        },
-      });
-
+      await service.update({ downloadFolder: 'C:\\Custom\\Downloads' });
       await service.reset();
 
       const settings = await service.get();

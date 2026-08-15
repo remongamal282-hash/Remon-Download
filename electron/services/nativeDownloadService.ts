@@ -420,7 +420,7 @@ export class NativeDownloadService extends EventEmitter {
     proc.on("error", (err: any) => {
       this.activeDownloads.delete(item.id);
 
-      let errorCode = "ytdlp_spawn_failed";
+      let errorCode: import('../../src/types/errors').AppErrorCode = "ytdlp_error";
       let errorMessage = "Failed to spawn yt-dlp process";
 
       if (err.code === "ENOENT") {
@@ -441,7 +441,7 @@ export class NativeDownloadService extends EventEmitter {
   /**
    * Maps yt-dlp stderr output to error codes
    */
-  private mapYtdlpError(stderr: string, exitCode: number | null): { code: string; message: string } {
+  private mapYtdlpError(stderr: string, exitCode: number | null): { code: import('../../src/types/errors').AppErrorCode; message: string } {
     const stderrLower = stderr.toLowerCase();
 
     if (stderrLower.includes("private video") || stderrLower.includes("members-only")) {
@@ -468,7 +468,7 @@ export class NativeDownloadService extends EventEmitter {
       return { code: "ffmpeg_error", message: "FFmpeg processing failed" };
     }
 
-    return { code: "download_failed", message: `Download failed with exit code ${exitCode}` };
+    return { code: "ytdlp_error", message: `Download failed with exit code ${exitCode}` };
   }
 
   /**
@@ -524,7 +524,7 @@ export class NativeDownloadService extends EventEmitter {
       await this.spawnDownload(item, false);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      const errorCode = errorMessage.includes("ytdlp_not_found") ? "ytdlp_not_found" : "download_failed";
+      const errorCode: import('../../src/types/errors').AppErrorCode = "ytdlp_error";
 
       this.updateItemStatus(id, "failed", {
         errorCode,
@@ -593,7 +593,7 @@ export class NativeDownloadService extends EventEmitter {
       await this.spawnDownload(item, true);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      const errorCode = errorMessage.includes("ytdlp_not_found") ? "ytdlp_not_found" : "download_failed";
+      const errorCode: import('../../src/types/errors').AppErrorCode = "ytdlp_error";
 
       this.updateItemStatus(id, "failed", {
         errorCode,

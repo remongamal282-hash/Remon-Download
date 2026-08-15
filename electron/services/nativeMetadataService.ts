@@ -185,8 +185,7 @@ function parseVideoMetadata(
     .sort((a, b) => b - a)
     .map((h) => `${h}p`);
 
-  // Extract formats
-  const videoFormats = new Set(formats.map((f) => f.ext).filter(Boolean));
+  const videoFormats = new Set(formats.map((f) => f.ext).filter((ext): ext is string => !!ext));
   const audioFormats = new Set<string>(["m4a", "mp3", "opus"]); // yt-dlp default audio formats
 
   // Best format info

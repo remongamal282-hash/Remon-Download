@@ -131,7 +131,7 @@ function parseVideoMetadata(raw, linkType, index = 1) {
     if (f.height && f.height > 0) heights.add(f.height);
   });
   const qualityOptions = Array.from(heights).sort((a, b) => b - a).map((h) => `${h}p`);
-  const videoFormats = new Set(formats.map((f) => f.ext).filter(Boolean));
+  const videoFormats = new Set(formats.map((f) => f.ext).filter((ext) => !!ext));
   const audioFormats = /* @__PURE__ */ new Set(["m4a", "mp3", "opus"]);
   const bestFormat = formats.find((f) => f.height && f.height > 0) ?? formats[0];
   const resolution = bestFormat?.height ? `${bestFormat.height}p` : "1080p";
@@ -600,7 +600,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     });
     proc.on("error", (err) => {
       this.activeDownloads.delete(item.id);
-      let errorCode = "ytdlp_spawn_failed";
+      let errorCode = "ytdlp_error";
       let errorMessage = "Failed to spawn yt-dlp process";
       if (err.code === "ENOENT") {
         errorCode = "ytdlp_not_found";
@@ -638,7 +638,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     if (stderrLower.includes("ffmpeg") || stderrLower.includes("postprocessor")) {
       return { code: "ffmpeg_error", message: "FFmpeg processing failed" };
     }
-    return { code: "download_failed", message: `Download failed with exit code ${exitCode}` };
+    return { code: "ytdlp_error", message: `Download failed with exit code ${exitCode}` };
   }
   /**
    * Updates item in memory
@@ -684,7 +684,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       await this.spawnDownload(item, false);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      const errorCode = errorMessage.includes("ytdlp_not_found") ? "ytdlp_not_found" : "download_failed";
+      const errorCode = "ytdlp_error";
       this.updateItemStatus(id, "failed", {
         errorCode,
         errorMessage,
@@ -737,7 +737,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       await this.spawnDownload(item, true);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      const errorCode = errorMessage.includes("ytdlp_not_found") ? "ytdlp_not_found" : "download_failed";
+      const errorCode = "ytdlp_error";
       this.updateItemStatus(id, "failed", {
         errorCode,
         errorMessage,
@@ -917,14 +917,20 @@ async function writeJsonFile(filename, data) {
 }
 
 // electron/services/nativeSettingsService.ts
+function isSettingsFileFormat(value) {
+  return !!value && typeof value === "object" && "data" in value && !!value.data && typeof value.data === "object";
+}
+function mergeWithDefaults(loaded) {
+  return { ...DEFAULT_SETTINGS, ...loaded };
+}
 var NativeSettingsService = class {
   settings = { ...DEFAULT_SETTINGS };
   SETTINGS_FILE = "settings.json";
   FILE_VERSION = "1.0.0";
   initializationPromise = null;
   /**
-   * Initialize service by loading settings from disk
-   * Must be called after construction
+   * Initialize service by loading settings from disk.
+   * Idempotent — multiple calls return the same promise.
    */
   async initialize() {
     if (this.initializationPromise) {
@@ -938,12 +944,16 @@ var NativeSettingsService = class {
           data: DEFAULT_SETTINGS
         }
       );
-      this.settings = fileData.data;
+      if (isSettingsFileFormat(fileData)) {
+        this.settings = mergeWithDefaults(fileData.data);
+        return;
+      }
+      this.settings = { ...DEFAULT_SETTINGS };
     })();
     return this.initializationPromise;
   }
   /**
-   * Ensure service is initialized before proceeding
+   * Ensure service is initialized before any operation.
    */
   async ensureInitialized() {
     if (!this.initializationPromise) {
@@ -953,7 +963,7 @@ var NativeSettingsService = class {
     }
   }
   /**
-   * Persist current settings to disk
+   * Persist current settings to disk.
    */
   async persist() {
     await writeJsonFile(this.SETTINGS_FILE, {
@@ -980,6 +990,32 @@ var NativeSettingsService = class {
 };
 
 // electron/services/nativeHistoryService.ts
+function isHistoryFileFormat(value) {
+  return !!value && typeof value === "object" && "data" in value && Array.isArray(value.data);
+}
+function normalizeHistoryItem(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  const dateValue = typeof item.date === "string" ? item.date : (/* @__PURE__ */ new Date()).toISOString();
+  return {
+    id: String(item.id ?? crypto.randomUUID()),
+    sourceDownloadId: String(item.sourceDownloadId ?? ""),
+    metadataId: String(item.metadataId ?? ""),
+    thumbnail: String(item.thumbnail ?? ""),
+    title: String(item.title ?? "Untitled Download"),
+    sourceUrl: String(item.sourceUrl ?? item["url"] ?? ""),
+    // Fallback to legacy 'url' if exists
+    date: dateValue,
+    quality: String(item.quality ?? "Unknown"),
+    format: String(item.format ?? "Unknown"),
+    fileSize: typeof item.fileSize === "number" ? item.fileSize : typeof item.size === "number" ? item.size : 0,
+    // Fallback to legacy 'size' if exists
+    status: item.status === "completed" || item.status === "failed" || item.status === "canceled" ? item.status : "completed",
+    errorCode: item.errorCode,
+    errorMessage: item.errorMessage ? String(item.errorMessage) : void 0
+  };
+}
 var NativeHistoryService = class {
   items = [];
   HISTORY_FILE = "history.json";
@@ -998,10 +1034,11 @@ var NativeHistoryService = class {
         version: this.FILE_VERSION,
         data: []
       });
-      this.items = fileData.data.map((item) => ({
-        ...item,
-        downloadedAt: new Date(item.downloadedAt)
-      }));
+      if (isHistoryFileFormat(fileData)) {
+        this.items = fileData.data.map((item) => normalizeHistoryItem(item)).filter((item) => item !== null);
+        return;
+      }
+      this.items = [];
     })();
     return this.initializationPromise;
   }
@@ -1029,16 +1066,19 @@ var NativeHistoryService = class {
     return [...this.items];
   }
   async add(item) {
+    await this.ensureInitialized();
     this.items = [item, ...this.items.filter((i) => i.id !== item.id)];
     await this.persist();
     return item;
   }
   async remove(id) {
+    await this.ensureInitialized();
     this.items = this.items.filter((i) => i.id !== id);
     await this.persist();
     return id;
   }
   async clear() {
+    await this.ensureInitialized();
     this.items = [];
     await this.persist();
   }
@@ -1129,26 +1169,77 @@ var NativeFavoritesService = class {
 };
 
 // electron/services/nativeSchedulerService.ts
+function isSchedulerFileFormat(value) {
+  return !!value && typeof value === "object" && "data" in value && Array.isArray(value.data);
+}
+var VALID_REPEAT = /* @__PURE__ */ new Set(["once", "daily", "weekly"]);
+var VALID_STATUS = /* @__PURE__ */ new Set([
+  "scheduled",
+  "triggered",
+  "completed",
+  "failed",
+  "canceled"
+]);
+function normalizeScheduledDownload(item) {
+  if (!item || typeof item !== "object") return null;
+  const id = item["id"] !== void 0 ? String(item["id"]) : null;
+  if (!id) return null;
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const repeat = VALID_REPEAT.has(String(item["repeat"] ?? "")) ? item["repeat"] : "once";
+  const status = VALID_STATUS.has(String(item["status"] ?? "")) ? item["status"] : "scheduled";
+  return {
+    id,
+    sourceUrl: String(item["sourceUrl"] ?? item["url"] ?? ""),
+    date: String(item["date"] ?? now.slice(0, 10)),
+    time: String(item["time"] ?? "00:00"),
+    repeat,
+    status,
+    nextRunAt: String(item["nextRunAt"] ?? now),
+    createdAt: String(item["createdAt"] ?? now),
+    updatedAt: String(item["updatedAt"] ?? now),
+    triggerCount: typeof item["triggerCount"] === "number" ? item["triggerCount"] : 0,
+    lastTriggeredAt: item["lastTriggeredAt"] !== void 0 ? String(item["lastTriggeredAt"]) : void 0,
+    errorMessage: item["errorMessage"] !== void 0 ? String(item["errorMessage"]) : void 0
+  };
+}
 var NativeSchedulerService = class {
   items = [];
   SCHEDULER_FILE = "scheduler.json";
   FILE_VERSION = "1.0.0";
+  initializationPromise = null;
   /**
-   * Initialize service by loading scheduler from disk
-   * Must be called after construction
+   * Initialize service by loading scheduler from disk.
+   * Idempotent — multiple calls return the same promise.
    */
   async initialize() {
-    const fileData = await readJsonFile(
-      this.SCHEDULER_FILE,
-      {
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+    this.initializationPromise = (async () => {
+      const fileData = await readJsonFile(this.SCHEDULER_FILE, {
         version: this.FILE_VERSION,
         data: []
+      });
+      if (isSchedulerFileFormat(fileData)) {
+        this.items = fileData.data.map((item) => normalizeScheduledDownload(item)).filter((item) => item !== null);
+        return;
       }
-    );
-    this.items = fileData.data;
+      this.items = [];
+    })();
+    return this.initializationPromise;
   }
   /**
-   * Persist current scheduler to disk
+   * Ensure service is initialized before any operation.
+   */
+  async ensureInitialized() {
+    if (!this.initializationPromise) {
+      await this.initialize();
+    } else {
+      await this.initializationPromise;
+    }
+  }
+  /**
+   * Persist current scheduler state to disk.
    */
   async persist() {
     await writeJsonFile(this.SCHEDULER_FILE, {
@@ -1157,9 +1248,11 @@ var NativeSchedulerService = class {
     });
   }
   async getAll() {
+    await this.ensureInitialized();
     return [...this.items];
   }
   async create(schedule) {
+    await this.ensureInitialized();
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const item = {
       ...schedule,
@@ -1173,6 +1266,7 @@ var NativeSchedulerService = class {
     return item;
   }
   async update(schedule) {
+    await this.ensureInitialized();
     const updated = {
       ...schedule,
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -1182,6 +1276,7 @@ var NativeSchedulerService = class {
     return updated;
   }
   async cancel(id) {
+    await this.ensureInitialized();
     const item = this.requireItem(id);
     const canceled = {
       ...item,
@@ -1193,6 +1288,7 @@ var NativeSchedulerService = class {
     return canceled;
   }
   async remove(id) {
+    await this.ensureInitialized();
     this.items = this.items.filter((i) => i.id !== id);
     await this.persist();
     return id;

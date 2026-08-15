@@ -4,9 +4,11 @@ const errorMessages: Record<AppErrorCode, string> = {
   unsupported_url: "errors.unsupportedUrl",
   network_error: "errors.networkError",
   video_unavailable: "errors.videoUnavailable",
+  video_private: "errors.videoPrivate",
   disk_full: "errors.diskFull",
   permission_denied: "errors.permissionDenied",
   ytdlp_error: "errors.ytdlpError",
+  ytdlp_not_found: "errors.ytdlpNotFound",
   ffmpeg_error: "errors.ffmpegError",
   unknown: "errors.unknown"
 };

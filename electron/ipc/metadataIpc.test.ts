@@ -344,7 +344,7 @@ describe("IPC handler — URL type coverage", () => {
 
 describe("ElectronMetadataService adapter", () => {
   beforeEach(() => {
-    delete (window as Record<string, unknown>).electronAPI;
+    delete (window as unknown as Record<string, unknown>).electronAPI;
   });
 
   it("delegates analyze() to window.electronAPI.metadata.analyze()", async () => {
@@ -371,7 +371,7 @@ describe("ElectronMetadataService adapter", () => {
       uploadDate: "2026-01-01"
     } satisfies VideoMetadata);
 
-    (window as Record<string, unknown>).electronAPI = {
+    (window as unknown as Record<string, unknown>).electronAPI = {
       isElectron: true,
       metadata: { analyze: mockAnalyze },
       download: {},
@@ -387,13 +387,13 @@ describe("ElectronMetadataService adapter", () => {
     expect(mockAnalyze).toHaveBeenCalledWith(URLS.video);
     expect(result.linkType).toBe("video");
 
-    delete (window as Record<string, unknown>).electronAPI;
+    delete (window as unknown as Record<string, unknown>).electronAPI;
   });
 
   it("re-throws errors from window.electronAPI.metadata.analyze()", async () => {
     const mockAnalyze = vi.fn().mockRejectedValue(new Error("unsupported_url"));
 
-    (window as Record<string, unknown>).electronAPI = {
+    (window as unknown as Record<string, unknown>).electronAPI = {
       isElectron: true,
       metadata: { analyze: mockAnalyze },
       download: {},
@@ -406,7 +406,7 @@ describe("ElectronMetadataService adapter", () => {
     const adapter = new ElectronMetadataService();
     await expect(adapter.analyze(URLS.unsupported)).rejects.toThrow("unsupported_url");
 
-    delete (window as Record<string, unknown>).electronAPI;
+    delete (window as unknown as Record<string, unknown>).electronAPI;
   });
 });
 
@@ -414,7 +414,7 @@ describe("ElectronMetadataService adapter", () => {
 
 describe("serviceResolver — metadata dual-mode", () => {
   beforeEach(() => {
-    delete (window as Record<string, unknown>).electronAPI;
+    delete (window as unknown as Record<string, unknown>).electronAPI;
     _resetServiceCache();
   });
 
@@ -424,11 +424,11 @@ describe("serviceResolver — metadata dual-mode", () => {
   });
 
   it("Electron mode — resolveMetadataService() returns ElectronMetadataService", () => {
-    (window as Record<string, unknown>).electronAPI = { isElectron: true };
+    (window as unknown as Record<string, unknown>).electronAPI = { isElectron: true };
     _resetServiceCache();
     const svc = resolveMetadataService();
     expect(svc).toBeInstanceOf(ElectronMetadataService);
-    delete (window as Record<string, unknown>).electronAPI;
+    delete (window as unknown as Record<string, unknown>).electronAPI;
   });
 
   it("Web mode MockMetadataService.analyze() rejects unsupported URLs with 'unsupported_url'", async () => {
