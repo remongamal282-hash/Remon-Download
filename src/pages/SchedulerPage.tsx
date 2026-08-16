@@ -1,10 +1,14 @@
 import { CalendarClock, Plus, Trash2, XCircle } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { ROUTES } from "../constants/routes";
+import { useMetadataStore } from "../stores/metadataStore";
+import { useQueueStore } from "../stores/queueStore";
 import { useSchedulerStore } from "../stores/schedulerStore";
+import { useSettingsStore } from "../stores/settingsStore";
 import type { ScheduledDownload, ScheduledDownloadStatus } from "../types/download";
 import { schedulerSchema, type SchedulerFormValues } from "../utils/schedulerValidation";
 
@@ -24,6 +28,22 @@ function timeInputValue(): string {
   return new Date().toTimeString().slice(0, 5);
 }
 
+function goToQueue() {
+  const destination = ROUTES.queue;
+
+  if (typeof window !== "undefined") {
+    const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+
+    if (currentPath !== destination) {
+      window.history.pushState({}, "", destination);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      return;
+    }
+  }
+
+  window.location.assign(destination);
+}
+
 export function SchedulerPage() {
   const { t } = useTranslation();
   const items = useSchedulerStore((state) => state.items);
@@ -34,6 +54,8 @@ export function SchedulerPage() {
   const create = useSchedulerStore((state) => state.create);
   const tick = useSchedulerStore((state) => state.tick);
   const clearError = useSchedulerStore((state) => state.clearError);
+  const settings = useSettingsStore((state) => state.settings);
+  const addFromMetadata = useQueueStore((state) => state.addFromMetadata);
 
   const {
     register,
@@ -53,12 +75,23 @@ export function SchedulerPage() {
     void load();
   }, [load]);
 
+  const intervalRef = useRef<number | null>(null);
+
   useEffect(() => {
-    const intervalId = window.setInterval(() => {
+    if (intervalRef.current !== null) {
+      window.clearInterval(intervalRef.current);
+    }
+
+    intervalRef.current = window.setInterval(() => {
       void tick();
     }, 1000);
 
-    return () => window.clearInterval(intervalId);
+    return () => {
+      if (intervalRef.current !== null) {
+        window.clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
   }, [tick]);
 
   useEffect(() => {
@@ -69,10 +102,19 @@ export function SchedulerPage() {
   }, [clearError, error, t]);
 
   useEffect(() => {
-    if (lastTriggeredId) {
-      toast.success(t("scheduler.toast.triggered"));
-      clearError();
+    if (!lastTriggeredId) {
+      return;
     }
+
+    toast.success(t("scheduler.toast.triggered"), {
+      description: t("scheduler.toast.triggeredDescription"),
+      action: {
+        label: t("scheduler.toast.goToQueue"),
+        onClick: goToQueue
+      }
+    });
+
+    clearError();
   }, [clearError, lastTriggeredId, t]);
 
   async function onSubmit(values: SchedulerFormValues) {
@@ -84,14 +126,15 @@ export function SchedulerPage() {
     });
 
     if (item) {
-      toast.success(t("scheduler.toast.created"));
+      toast.success(t("scheduler.toast.created"), {
+        description: t("scheduler.toast.scheduled")
+      });
       reset({
         url: "",
         date: todayInputValue(),
         time: timeInputValue(),
         repeat: "once"
       });
-      void tick();
     }
   }
 

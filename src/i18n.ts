@@ -173,7 +173,10 @@ export const resources = {
         },
         toast: {
           created: "Scheduled download created.",
-          triggered: "Scheduled download added to queue."
+          scheduled: "Download will start at the scheduled time.",
+          triggered: "Scheduled download added to queue.",
+          triggeredDescription: "Click 'Go to Queue' to view the download.",
+          goToQueue: "Go to Queue"
         },
         errors: {
           notFound: "Scheduled download was not found."
@@ -461,7 +464,10 @@ export const resources = {
         },
         toast: {
           created: "تم إنشاء التنزيل المجدول.",
-          triggered: "تمت إضافة التنزيل المجدول إلى القائمة."
+          scheduled: "سيبدأ التنزيل في الموقت المحدد.",
+          triggered: "تمت إضافة التنزيل المجدول إلى القائمة.",
+          triggeredDescription: "اضغط على 'الذهاب للقائمة' لعرض التنزيل.",
+          goToQueue: "الذهاب للقائمة"
         },
         errors: {
           notFound: "التنزيل المجدول غير موجود."

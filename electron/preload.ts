@@ -99,7 +99,9 @@ const electronAPI: ElectronAPI = {
     update: (schedule: ScheduledDownload): Promise<ScheduledDownload> =>
       invoke(IPC_CHANNELS.SCHEDULER_UPDATE, { schedule }),
     cancel: (id: string): Promise<ScheduledDownload> => invoke(IPC_CHANNELS.SCHEDULER_CANCEL, { id }),
-    remove: (id: string): Promise<string> => invoke(IPC_CHANNELS.SCHEDULER_REMOVE, { id })
+    remove: (id: string): Promise<string> => invoke(IPC_CHANNELS.SCHEDULER_REMOVE, { id }),
+    tick: (now: number): Promise<{ items: ScheduledDownload[]; triggered: Array<{ schedule: ScheduledDownload; metadata: any }> }> =>
+      invoke(IPC_CHANNELS.SCHEDULER_TICK, { now })
   }
 };
 

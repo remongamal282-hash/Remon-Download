@@ -43,6 +43,37 @@ describe("useSchedulerStore", () => {
     });
   });
 
+  it("adds a once-only scheduled item to the queue only once even if tick is called repeatedly", async () => {
+    const item = await useSchedulerStore.getState().create(scheduleInput);
+
+    const firstTick = await useSchedulerStore.getState().tick(new Date(item?.nextRunAt ?? "").getTime());
+    const secondTick = await useSchedulerStore.getState().tick(new Date(item?.nextRunAt ?? "").getTime());
+
+    expect(firstTick).toBe(1);
+    expect(secondTick).toBe(0);
+    expect(useQueueStore.getState().items).toHaveLength(1);
+    expect(useQueueStore.getState().items[0]).toMatchObject({
+      sourceUrl: scheduleInput.sourceUrl,
+      status: "queued"
+    });
+  });
+
+  it("ignores overlapping tick calls so a due item is not added to the queue multiple times", async () => {
+    const item = await useSchedulerStore.getState().create(scheduleInput);
+    const dueAt = new Date(item?.nextRunAt ?? "").getTime();
+
+    await Promise.all([
+      useSchedulerStore.getState().tick(dueAt),
+      useSchedulerStore.getState().tick(dueAt)
+    ]);
+
+    expect(useQueueStore.getState().items).toHaveLength(1);
+    expect(useQueueStore.getState().items[0]).toMatchObject({
+      sourceUrl: scheduleInput.sourceUrl,
+      status: "queued"
+    });
+  });
+
   it("updates, cancels, and removes schedules", async () => {
     const item = await useSchedulerStore.getState().create(scheduleInput);
 

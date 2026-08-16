@@ -24,7 +24,7 @@ describe("MockSchedulerService", () => {
     });
   });
 
-  it("triggers due one-time schedules and returns queue metadata", async () => {
+  it("triggers due one-time schedules and returns queue metadata with a real video title", async () => {
     const service = new MockSchedulerService();
     const item = await service.create(scheduleInput);
 
@@ -33,7 +33,8 @@ describe("MockSchedulerService", () => {
     expect(result.triggered).toHaveLength(1);
     expect(result.triggered[0]?.metadata).toMatchObject({
       sourceUrl: scheduleInput.sourceUrl,
-      linkType: "video"
+      linkType: "video",
+      title: "scheduled-test"
     });
     expect(result.items[0]).toMatchObject({
       status: "triggered",

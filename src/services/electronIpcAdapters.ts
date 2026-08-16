@@ -54,6 +54,7 @@ export class ElectronDownloadService implements DownloadService {
   private progressUnsubscribe: (() => void) | null = null;
   private stateChangeUnsubscribe: (() => void) | null = null;
   private updateCallbacks: Set<(id: string, item: DownloadItem) => void> = new Set();
+  private pendingStarts: Set<string> = new Set();
 
   constructor() {
     // Subscribe to IPC progress events
@@ -246,35 +247,39 @@ export class ElectronDownloadService implements DownloadService {
    * In Electron mode, this sends command to Main Process and waits for state change event
    */
   transition(item: DownloadItem, status: DownloadStatus, now: number): DownloadItem {
-    // For queued → analyzing transition, call start() immediately (Electron mode optimization)
-    // In Mock mode, tick() progresses analyzing → downloading after 650ms
-    // In Electron mode, we skip analyzing and go directly to downloading by calling start()
-    if (item.status === "queued" && status === "analyzing") {
-      void window.electronAPI!.download.start(item.id);
-    }
-    // For analyzing → downloading transition, call start() (fallback/explicit case)
-    else if (item.status === "analyzing" && status === "downloading") {
-      void window.electronAPI!.download.start(item.id);
-    }
-    // For downloading → paused, call pause()
-    else if (item.status === "downloading" && status === "paused") {
+    const startRequested = item.status === "queued" && status === "analyzing";
+    const resumeRequested = item.status === "analyzing" && status === "downloading";
+
+    if (startRequested || resumeRequested) {
+      if (this.pendingStarts.has(item.id)) {
+        status = "downloading";
+      } else {
+        this.pendingStarts.add(item.id);
+        const startPromise = window.electronAPI!.download.start(item.id);
+        if (startPromise && typeof (startPromise as Promise<unknown>).finally === "function") {
+          void (startPromise as Promise<unknown>).finally(() => {
+            this.pendingStarts.delete(item.id);
+          });
+        } else {
+          this.pendingStarts.delete(item.id);
+        }
+        status = "downloading";
+      }
+    } else if (item.status === "downloading" && status === "paused") {
       void window.electronAPI!.download.pause(item.id);
-    }
-    // For paused → downloading, call resume()
-    else if (item.status === "paused" && status === "downloading") {
+    } else if (item.status === "paused" && status === "downloading") {
       void window.electronAPI!.download.resume(item.id);
-    }
-    // For any status → canceled, call cancel()
-    else if (status === "canceled") {
+    } else if (status === "canceled") {
       void window.electronAPI!.download.cancel(item.id);
     }
 
-    // Update local cache optimistically (will be overwritten by IPC event)
     const updated = {
       ...item,
       status,
       phaseStartedAt: now,
-      lastUpdatedAt: now
+      lastUpdatedAt: now,
+      speed: status === "downloading" ? 0 : item.speed,
+      eta: status === "downloading" ? "--" : item.eta
     };
     this.itemsCache.set(item.id, updated);
     return updated;
@@ -501,11 +506,13 @@ export class ElectronSchedulerService implements SchedulerService {
     await window.electronAPI!.scheduler.remove(id);
   }
 
-  async tick(_now: number): Promise<SchedulerTickResult> {
-    // Tick logic is handled in the Native Main Process for Electron.
-    // The renderer should not poll for ticks; instead listen to push events (Phase 2.x).
-    const items = await this.getAll();
-    return { items, triggered: [] };
+  async tick(now: number): Promise<SchedulerTickResult> {
+    if (!window.electronAPI?.scheduler || typeof (window.electronAPI.scheduler as any).tick !== "function") {
+      const items = await this.getAll();
+      return { items, triggered: [] };
+    }
+
+    return window.electronAPI.scheduler.tick(now);
   }
 
   async clear(): Promise<void> {

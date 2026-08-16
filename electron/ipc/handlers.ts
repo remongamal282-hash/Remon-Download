@@ -424,4 +424,13 @@ export function registerIpcHandlers(): void {
       return wrapError(err);
     }
   });
+
+  ipcMain.handle(IPC_CHANNELS.SCHEDULER_TICK, async (_, { now }) => {
+    try {
+      const data = await schedulerService.tick(now);
+      return wrapSuccess(data);
+    } catch (err) {
+      return wrapError(err);
+    }
+  });
 }

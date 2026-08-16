@@ -4,6 +4,8 @@ import { registerIpcHandlers } from "./ipc/handlers";
 
 let mainWindow: BrowserWindow | null = null;
 
+const appIconPath = path.resolve(__dirname, "../../icon.png");
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -11,6 +13,7 @@ function createWindow(): void {
     minWidth: 1024,
     minHeight: 600,
     title: "Remon Download",
+    icon: appIconPath,
     autoHideMenuBar: true,
     titleBarStyle: "hidden",
     trafficLightPosition: { x: 18, y: 18 },
@@ -71,6 +74,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  app.setAppUserModelId("com.remon.download");
   createWindow();
 
   app.on("activate", () => {

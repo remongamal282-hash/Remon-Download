@@ -91,6 +91,7 @@ export interface ElectronAPI {
     update(schedule: ScheduledDownload): Promise<ScheduledDownload>;
     cancel(id: string): Promise<ScheduledDownload>;
     remove(id: string): Promise<string>;
+    tick(now: number): Promise<{ items: ScheduledDownload[]; triggered: Array<{ schedule: ScheduledDownload; metadata: import("./download").VideoMetadata }> }>;
   };
 }
 

@@ -11,8 +11,9 @@
  * - ensureInitialized() in every public method
  * - persist() after create/update/cancel/remove
  */
-import type { ScheduledDownload, ScheduleRepeat, ScheduledDownloadStatus } from '../../src/types/download';
+import type { ScheduledDownload, ScheduleRepeat, ScheduledDownloadStatus, VideoMetadata } from '../../src/types/download';
 import { readJsonFile, writeJsonFile } from '../utils/fileStorage';
+import { NativeMetadataService } from './nativeMetadataService';
 
 interface SchedulerFileFormat {
   version: string;
@@ -74,6 +75,7 @@ export class NativeSchedulerService {
   private readonly SCHEDULER_FILE = 'scheduler.json';
   private readonly FILE_VERSION = '1.0.0';
   private initializationPromise: Promise<void> | null = null;
+  private nextError: Error | null = null;
 
   /**
    * Initialize service by loading scheduler from disk.
@@ -126,6 +128,7 @@ export class NativeSchedulerService {
   }
 
   async getAll(): Promise<ScheduledDownload[]> {
+    this.throwIfNeeded();
     await this.ensureInitialized();
     return [...this.items];
   }
@@ -133,6 +136,7 @@ export class NativeSchedulerService {
   async create(
     schedule: Omit<ScheduledDownload, 'id' | 'createdAt' | 'updatedAt' | 'triggerCount'>
   ): Promise<ScheduledDownload> {
+    this.throwIfNeeded();
     await this.ensureInitialized();
 
     const now = new Date().toISOString();
@@ -149,6 +153,7 @@ export class NativeSchedulerService {
   }
 
   async update(schedule: ScheduledDownload): Promise<ScheduledDownload> {
+    this.throwIfNeeded();
     await this.ensureInitialized();
 
     const updated: ScheduledDownload = {
@@ -161,6 +166,7 @@ export class NativeSchedulerService {
   }
 
   async cancel(id: string): Promise<ScheduledDownload> {
+    this.throwIfNeeded();
     await this.ensureInitialized();
 
     const item = this.requireItem(id);
@@ -175,6 +181,7 @@ export class NativeSchedulerService {
   }
 
   async remove(id: string): Promise<string> {
+    this.throwIfNeeded();
     await this.ensureInitialized();
 
     this.items = this.items.filter((i) => i.id !== id);
@@ -182,9 +189,157 @@ export class NativeSchedulerService {
     return id;
   }
 
+  async tick(now: number): Promise<{ items: ScheduledDownload[]; triggered: Array<{ schedule: ScheduledDownload; metadata: VideoMetadata }> }> {
+    this.throwIfNeeded();
+    await this.ensureInitialized();
+
+    const triggered: Array<{ schedule: ScheduledDownload; metadata: VideoMetadata }> = [];
+    const nowIso = new Date(now).toISOString();
+    const nextItems: ScheduledDownload[] = [];
+
+    for (const item of this.items) {
+      // Only process scheduled items that are due
+      if (item.status !== 'scheduled' || new Date(item.nextRunAt).getTime() > now) {
+        nextItems.push(item);
+        continue;
+      }
+
+      // Item is due - trigger it
+      const addRepeatTime = (runAt: string, repeat: ScheduleRepeat): string => {
+        const date = new Date(runAt);
+        if (repeat === 'daily') {
+          date.setDate(date.getDate() + 1);
+        } else if (repeat === 'weekly') {
+          date.setDate(date.getDate() + 7);
+        }
+        return date.toISOString();
+      };
+
+      const triggeredItem: ScheduledDownload = {
+        ...item,
+        status: item.repeat === 'once' ? 'triggered' : 'scheduled',
+        nextRunAt: item.repeat === 'once' ? item.nextRunAt : addRepeatTime(item.nextRunAt, item.repeat),
+        triggerCount: item.triggerCount + 1,
+        lastTriggeredAt: nowIso,
+        updatedAt: nowIso,
+      };
+
+      triggered.push({
+        schedule: triggeredItem,
+        metadata: await this.createMetadata(triggeredItem),
+      });
+
+      nextItems.push(triggeredItem);
+    }
+
+    this.items = nextItems;
+
+    // Persist changes only if something was triggered
+    if (triggered.length > 0) {
+      await this.persist();
+    }
+
+    return {
+      items: [...this.items],
+      triggered,
+    };
+  }
+
+  async clear(): Promise<void> {
+    this.throwIfNeeded();
+    await this.ensureInitialized();
+    this.items = [];
+    await this.persist();
+  }
+
+  failNext(error: Error): void {
+    this.nextError = error;
+  }
+
+  private throwIfNeeded(): void {
+    if (this.nextError) {
+      const error = this.nextError;
+      this.nextError = null;
+      throw error;
+    }
+  }
+
   private requireItem(id: string): ScheduledDownload {
     const item = this.items.find((i) => i.id === id);
     if (!item) throw new Error(`Scheduled item not found: ${id}`);
     return item;
+  }
+
+  private async createMetadata(schedule: ScheduledDownload): Promise<VideoMetadata> {
+    const triggerNumber = schedule.triggerCount + 1;
+    const fallbackTitle = `Scheduled Download ${triggerNumber}`;
+
+    try {
+      const analyzed = await new NativeMetadataService().analyze(schedule.sourceUrl);
+      if (analyzed.linkType === 'video' || analyzed.linkType === 'shorts' || analyzed.linkType === 'playlist-video') {
+        return {
+          ...analyzed,
+          id: `scheduled-${schedule.id}-${triggerNumber}`,
+        };
+      }
+    } catch {
+      // Fall back to URL-based metadata when the yt-dlp lookup fails.
+    }
+
+    const title = (() => {
+      try {
+        const parsed = new URL(schedule.sourceUrl);
+        const videoId = parsed.searchParams.get('v');
+        if (videoId) {
+          return videoId;
+        }
+
+        const lastSegment = parsed.pathname.split('/').filter(Boolean).at(-1);
+        if (lastSegment) {
+          return decodeURIComponent(lastSegment.replace(/[-_]/g, ' '));
+        }
+      } catch {
+        // Ignore invalid URLs and fall back to the generic scheduled title.
+      }
+
+      return fallbackTitle;
+    })();
+
+    const thumbnail = (() => {
+      try {
+        const parsed = new URL(schedule.sourceUrl);
+        const videoId = parsed.searchParams.get('v');
+        if (videoId) {
+          return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+        }
+      } catch {
+        // Ignore invalid URLs and fall back to the generic scheduled thumbnail.
+      }
+
+      return 'https://picsum.photos/seed/remon-scheduled/320/180';
+    })();
+
+    return {
+      id: `scheduled-${schedule.id}-${triggerNumber}`,
+      sourceUrl: schedule.sourceUrl,
+      linkType: 'video',
+      thumbnail,
+      title,
+      channelName: 'Scheduled Queue',
+      duration: '10:24',
+      views: 128000,
+      qualityOptions: ['2160p', '1440p', '1080p', '720p', '480p'],
+      videoFormats: ['mp4', 'webm', 'mkv'],
+      audioFormats: ['mp3', 'opus'],
+      resolution: '1080p',
+      fps: 60,
+      videoCodec: 'H.264',
+      audioCodec: 'AAC',
+      videoBitrate: '7.8 Mbps',
+      audioBitrate: '192 Kbps',
+      container: 'mp4',
+      fileSize: 220 * 1024 * 1024,
+      uploadDate: '2026-08-01',
+    };
   }
 }

@@ -51,13 +51,21 @@ function installFakeElectronAPI() {
         onStateChange: vi.fn(() => () => { }), // Returns unsubscribe function
         add: vi.fn(),
         getAll: vi.fn(async () => []),
-        start: vi.fn(),
-        pause: vi.fn(),
-        resume: vi.fn(),
-        cancel: vi.fn(),
-        retry: vi.fn(),
-        remove: vi.fn(),
-        reorder: vi.fn()
+        start: vi.fn(async () => ({})),
+        pause: vi.fn(async () => ({})),
+        resume: vi.fn(async () => ({})),
+        cancel: vi.fn(async () => ({})),
+        retry: vi.fn(async () => ({})),
+        remove: vi.fn(async () => ""),
+        reorder: vi.fn(async () => [])
+      },
+      scheduler: {
+        getAll: vi.fn(async () => []),
+        create: vi.fn(async () => ({})),
+        update: vi.fn(async () => ({})),
+        cancel: vi.fn(async () => ({})),
+        remove: vi.fn(async () => ""),
+        tick: vi.fn(async () => ({ items: [], triggered: [] }))
       }
     },
     writable: true,
@@ -171,6 +179,77 @@ describe("serviceResolver", () => {
     });
   });
 
+  describe("Electron queue transitions", () => {
+    it("moves a started download out of analyzing immediately in the UI", async () => {
+      installFakeElectronAPI();
+      const service = new ElectronDownloadService();
+      const metadata = {
+        id: "video-queued",
+        sourceUrl: "https://www.youtube.com/watch?v=test123",
+        linkType: "video",
+        thumbnail: "https://example.com/thumb.jpg",
+        title: "Queued Test",
+        channelName: "Test Channel",
+        duration: "10:00",
+        views: 100,
+        qualityOptions: ["720p"],
+        videoFormats: ["mp4"],
+        audioFormats: ["mp3"],
+        resolution: "720p",
+        fps: 30,
+        videoCodec: "H.264",
+        audioCodec: "AAC",
+        videoBitrate: "5 Mbps",
+        audioBitrate: "192 Kbps",
+        container: "mp4",
+        fileSize: 10 * 1024 * 1024,
+        uploadDate: "2026-08-01"
+      } as const;
+
+      const item = service.createFromMetadata(metadata, 1, "720p", "mp4");
+      const next = service.transition(item, "analyzing", Date.now());
+
+      expect(next.status).toBe("downloading");
+      expect(window.electronAPI!.download.start).toHaveBeenCalledTimes(1);
+      expect(window.electronAPI!.download.start).toHaveBeenCalledWith(item.id);
+    });
+
+    it("does not issue duplicate start requests when queued items are reprocessed before state refresh", async () => {
+      installFakeElectronAPI();
+      const service = new ElectronDownloadService();
+      const metadata = {
+        id: "video-repeat-start",
+        sourceUrl: "https://www.youtube.com/watch?v=test456",
+        linkType: "video",
+        thumbnail: "https://example.com/thumb2.jpg",
+        title: "Repeat Start",
+        channelName: "Test Channel",
+        duration: "05:00",
+        views: 100,
+        qualityOptions: ["720p"],
+        videoFormats: ["mp4"],
+        audioFormats: ["mp3"],
+        resolution: "720p",
+        fps: 30,
+        videoCodec: "H.264",
+        audioCodec: "AAC",
+        videoBitrate: "4 Mbps",
+        audioBitrate: "192 Kbps",
+        container: "mp4",
+        fileSize: 8 * 1024 * 1024,
+        uploadDate: "2026-08-01"
+      } as const;
+
+      const item = service.createFromMetadata(metadata, 1, "720p", "mp4");
+
+      service.transition(item, "analyzing", Date.now());
+      service.transition(item, "analyzing", Date.now());
+      service.transition(item, "analyzing", Date.now());
+
+      expect(window.electronAPI!.download.start).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // ── Test injection helpers ─────────────────────────────────────────────
 
   describe("test injection helpers", () => {
@@ -248,6 +327,16 @@ describe("serviceResolver", () => {
       expect(typeof svc.tick).toBe("function");
       expect(typeof svc.clear).toBe("function");
       expect(typeof svc.failNext).toBe("function");
+    });
+
+    it("ElectronSchedulerService.tick delegates to the Electron scheduler IPC", async () => {
+      installFakeElectronAPI();
+      const svc = new ElectronSchedulerService();
+      const result = { items: [], triggered: [] };
+      window.electronAPI!.scheduler.tick = vi.fn(async () => result);
+
+      await expect(svc.tick(1234)).resolves.toBe(result);
+      expect(window.electronAPI!.scheduler.tick).toHaveBeenCalledWith(1234);
     });
   });
 });

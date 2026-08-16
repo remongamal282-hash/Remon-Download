@@ -31,7 +31,8 @@ export const IPC_CHANNELS = {
   SCHEDULER_CREATE: "scheduler:create",
   SCHEDULER_UPDATE: "scheduler:update",
   SCHEDULER_CANCEL: "scheduler:cancel",
-  SCHEDULER_REMOVE: "scheduler:remove"
+  SCHEDULER_REMOVE: "scheduler:remove",
+  SCHEDULER_TICK: "scheduler:tick"
 } as const;
 
 /**
@@ -80,6 +81,7 @@ export interface IpcContractPayloads {
   [IPC_CHANNELS.SCHEDULER_UPDATE]: { schedule: ScheduledDownload };
   [IPC_CHANNELS.SCHEDULER_CANCEL]: { id: string };
   [IPC_CHANNELS.SCHEDULER_REMOVE]: { id: string };
+  [IPC_CHANNELS.SCHEDULER_TICK]: { now: number };
 }
 
 export interface IpcContractResponses {
@@ -112,6 +114,7 @@ export interface IpcContractResponses {
   [IPC_CHANNELS.SCHEDULER_UPDATE]: ScheduledDownload;
   [IPC_CHANNELS.SCHEDULER_CANCEL]: ScheduledDownload;
   [IPC_CHANNELS.SCHEDULER_REMOVE]: string;
+  [IPC_CHANNELS.SCHEDULER_TICK]: { items: ScheduledDownload[]; triggered: Array<{ schedule: ScheduledDownload; metadata: import("../../src/types/download").VideoMetadata }> };
 }
 
 /**

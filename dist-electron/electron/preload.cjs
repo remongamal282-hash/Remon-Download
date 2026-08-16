@@ -31,7 +31,8 @@ var IPC_CHANNELS = {
   SCHEDULER_CREATE: "scheduler:create",
   SCHEDULER_UPDATE: "scheduler:update",
   SCHEDULER_CANCEL: "scheduler:cancel",
-  SCHEDULER_REMOVE: "scheduler:remove"
+  SCHEDULER_REMOVE: "scheduler:remove",
+  SCHEDULER_TICK: "scheduler:tick"
 };
 var IPC_EVENTS = {
   DOWNLOAD_PROGRESS: "download:progress",
@@ -100,7 +101,8 @@ var electronAPI = {
     create: (schedule) => invoke(IPC_CHANNELS.SCHEDULER_CREATE, { schedule }),
     update: (schedule) => invoke(IPC_CHANNELS.SCHEDULER_UPDATE, { schedule }),
     cancel: (id) => invoke(IPC_CHANNELS.SCHEDULER_CANCEL, { id }),
-    remove: (id) => invoke(IPC_CHANNELS.SCHEDULER_REMOVE, { id })
+    remove: (id) => invoke(IPC_CHANNELS.SCHEDULER_REMOVE, { id }),
+    tick: (now) => invoke(IPC_CHANNELS.SCHEDULER_TICK, { now })
   }
 };
 import_electron.contextBridge.exposeInMainWorld("electronAPI", electronAPI);

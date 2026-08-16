@@ -58,7 +58,8 @@ var IPC_CHANNELS = {
   SCHEDULER_CREATE: "scheduler:create",
   SCHEDULER_UPDATE: "scheduler:update",
   SCHEDULER_CANCEL: "scheduler:cancel",
-  SCHEDULER_REMOVE: "scheduler:remove"
+  SCHEDULER_REMOVE: "scheduler:remove",
+  SCHEDULER_TICK: "scheduler:tick"
 };
 var IPC_EVENTS = {
   DOWNLOAD_PROGRESS: "download:progress",
@@ -225,11 +226,11 @@ var NativeMetadataService = class {
     const candidates = ["yt-dlp", "yt-dlp.exe", "youtube-dl", "youtube-dl.exe"];
     for (const candidate of candidates) {
       try {
-        await new Promise((resolve, reject) => {
+        await new Promise((resolve2, reject) => {
           const proc = this.executor.spawn(candidate, ["--version"], { timeout: 5e3 });
           proc.on("error", reject);
           proc.on("exit", (code) => {
-            if (code === 0) resolve();
+            if (code === 0) resolve2();
             else reject(new Error(`Exit code ${code}`));
           });
         });
@@ -243,7 +244,7 @@ var NativeMetadataService = class {
    * Spawns yt-dlp process and returns parsed JSON output.
    */
   async executeYtdlp(ytdlpPath, url, isPlaylist = false) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       const args = [
         "--dump-single-json",
         isPlaylist ? "--yes-playlist" : "--no-playlist",
@@ -278,7 +279,7 @@ var NativeMetadataService = class {
         if (code === 0) {
           try {
             const parsed = JSON.parse(stdout);
-            resolve(parsed);
+            resolve2(parsed);
           } catch {
             reject(new Error("ytdlp_invalid_json"));
           }
@@ -385,11 +386,11 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     const candidates = ["yt-dlp", "yt-dlp.exe", "youtube-dl", "youtube-dl.exe"];
     for (const candidate of candidates) {
       try {
-        await new Promise((resolve, reject) => {
+        await new Promise((resolve2, reject) => {
           const proc = this.executor.spawn(candidate, ["--version"], { timeout: 5e3 });
           proc.on("error", reject);
           proc.on("exit", (code) => {
-            if (code === 0) resolve();
+            if (code === 0) resolve2();
             else reject(new Error(`Exit code ${code}`));
           });
         });
@@ -1310,6 +1311,7 @@ var NativeSchedulerService = class {
   SCHEDULER_FILE = "scheduler.json";
   FILE_VERSION = "1.0.0";
   initializationPromise = null;
+  nextError = null;
   /**
    * Initialize service by loading scheduler from disk.
    * Idempotent — multiple calls return the same promise.
@@ -1351,10 +1353,12 @@ var NativeSchedulerService = class {
     });
   }
   async getAll() {
+    this.throwIfNeeded();
     await this.ensureInitialized();
     return [...this.items];
   }
   async create(schedule) {
+    this.throwIfNeeded();
     await this.ensureInitialized();
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const item = {
@@ -1369,6 +1373,7 @@ var NativeSchedulerService = class {
     return item;
   }
   async update(schedule) {
+    this.throwIfNeeded();
     await this.ensureInitialized();
     const updated = {
       ...schedule,
@@ -1379,6 +1384,7 @@ var NativeSchedulerService = class {
     return updated;
   }
   async cancel(id) {
+    this.throwIfNeeded();
     await this.ensureInitialized();
     const item = this.requireItem(id);
     const canceled = {
@@ -1391,15 +1397,137 @@ var NativeSchedulerService = class {
     return canceled;
   }
   async remove(id) {
+    this.throwIfNeeded();
     await this.ensureInitialized();
     this.items = this.items.filter((i) => i.id !== id);
     await this.persist();
     return id;
   }
+  async tick(now) {
+    this.throwIfNeeded();
+    await this.ensureInitialized();
+    const triggered = [];
+    const nowIso = new Date(now).toISOString();
+    const nextItems = [];
+    for (const item of this.items) {
+      if (item.status !== "scheduled" || new Date(item.nextRunAt).getTime() > now) {
+        nextItems.push(item);
+        continue;
+      }
+      const addRepeatTime = (runAt, repeat) => {
+        const date = new Date(runAt);
+        if (repeat === "daily") {
+          date.setDate(date.getDate() + 1);
+        } else if (repeat === "weekly") {
+          date.setDate(date.getDate() + 7);
+        }
+        return date.toISOString();
+      };
+      const triggeredItem = {
+        ...item,
+        status: item.repeat === "once" ? "triggered" : "scheduled",
+        nextRunAt: item.repeat === "once" ? item.nextRunAt : addRepeatTime(item.nextRunAt, item.repeat),
+        triggerCount: item.triggerCount + 1,
+        lastTriggeredAt: nowIso,
+        updatedAt: nowIso
+      };
+      triggered.push({
+        schedule: triggeredItem,
+        metadata: await this.createMetadata(triggeredItem)
+      });
+      nextItems.push(triggeredItem);
+    }
+    this.items = nextItems;
+    if (triggered.length > 0) {
+      await this.persist();
+    }
+    return {
+      items: [...this.items],
+      triggered
+    };
+  }
+  async clear() {
+    this.throwIfNeeded();
+    await this.ensureInitialized();
+    this.items = [];
+    await this.persist();
+  }
+  failNext(error) {
+    this.nextError = error;
+  }
+  throwIfNeeded() {
+    if (this.nextError) {
+      const error = this.nextError;
+      this.nextError = null;
+      throw error;
+    }
+  }
   requireItem(id) {
     const item = this.items.find((i) => i.id === id);
     if (!item) throw new Error(`Scheduled item not found: ${id}`);
     return item;
+  }
+  async createMetadata(schedule) {
+    const triggerNumber = schedule.triggerCount + 1;
+    const fallbackTitle = `Scheduled Download ${triggerNumber}`;
+    try {
+      const analyzed = await new NativeMetadataService().analyze(schedule.sourceUrl);
+      if (analyzed.linkType === "video" || analyzed.linkType === "shorts" || analyzed.linkType === "playlist-video") {
+        return {
+          ...analyzed,
+          id: `scheduled-${schedule.id}-${triggerNumber}`
+        };
+      }
+    } catch {
+    }
+    const title = (() => {
+      try {
+        const parsed = new URL(schedule.sourceUrl);
+        const videoId = parsed.searchParams.get("v");
+        if (videoId) {
+          return videoId;
+        }
+        const lastSegment = parsed.pathname.split("/").filter(Boolean).at(-1);
+        if (lastSegment) {
+          return decodeURIComponent(lastSegment.replace(/[-_]/g, " "));
+        }
+      } catch {
+      }
+      return fallbackTitle;
+    })();
+    const thumbnail = (() => {
+      try {
+        const parsed = new URL(schedule.sourceUrl);
+        const videoId = parsed.searchParams.get("v");
+        if (videoId) {
+          return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+        }
+      } catch {
+      }
+      return "https://picsum.photos/seed/remon-scheduled/320/180";
+    })();
+    return {
+      id: `scheduled-${schedule.id}-${triggerNumber}`,
+      sourceUrl: schedule.sourceUrl,
+      linkType: "video",
+      thumbnail,
+      title,
+      channelName: "Scheduled Queue",
+      duration: "10:24",
+      views: 128e3,
+      qualityOptions: ["2160p", "1440p", "1080p", "720p", "480p"],
+      videoFormats: ["mp4", "webm", "mkv"],
+      audioFormats: ["mp3", "opus"],
+      resolution: "1080p",
+      fps: 60,
+      videoCodec: "H.264",
+      audioCodec: "AAC",
+      videoBitrate: "7.8 Mbps",
+      audioBitrate: "192 Kbps",
+      container: "mp4",
+      fileSize: 220 * 1024 * 1024,
+      uploadDate: "2026-08-01"
+    };
   }
 };
 
@@ -1755,10 +1883,19 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
+  import_electron2.ipcMain.handle(IPC_CHANNELS.SCHEDULER_TICK, async (_, { now }) => {
+    try {
+      const data = await schedulerService.tick(now);
+      return wrapSuccess(data);
+    } catch (err) {
+      return wrapError(err);
+    }
+  });
 }
 
 // electron/main.ts
 var mainWindow = null;
+var appIconPath = path2.resolve(__dirname, "../../icon.png");
 function createWindow() {
   mainWindow = new import_electron3.BrowserWindow({
     width: 1280,
@@ -1766,6 +1903,7 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 600,
     title: "Remon Download",
+    icon: appIconPath,
     autoHideMenuBar: true,
     titleBarStyle: "hidden",
     trafficLightPosition: { x: 18, y: 18 },
@@ -1811,6 +1949,7 @@ function createWindow() {
   });
 }
 import_electron3.app.whenReady().then(() => {
+  import_electron3.app.setAppUserModelId("com.remon.download");
   createWindow();
   import_electron3.app.on("activate", () => {
     if (import_electron3.BrowserWindow.getAllWindows().length === 0) {

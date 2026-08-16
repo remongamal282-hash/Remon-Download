@@ -35,6 +35,8 @@ function toErrorModel(error: unknown): ErrorModel {
   };
 }
 
+let schedulerTickInFlight = false;
+
 export const useSchedulerStore = create<SchedulerState>((set, get) => ({
   items: [],
   isLoading: false,
@@ -93,11 +95,26 @@ export const useSchedulerStore = create<SchedulerState>((set, get) => ({
     }
   },
   tick: async (now = Date.now()) => {
+    if (schedulerTickInFlight) {
+      return 0;
+    }
+
+    schedulerTickInFlight = true;
+
     try {
       const result = await resolveSchedulerService().tick(now);
       const settings = useSettingsStore.getState().settings;
 
+      const seenTriggeredScheduleIds = new Set<string>();
+
       result.triggered.forEach((triggered) => {
+        const identityKey = `${triggered.schedule.id}:${triggered.schedule.triggerCount}`;
+        if (seenTriggeredScheduleIds.has(identityKey)) {
+          return;
+        }
+
+        seenTriggeredScheduleIds.add(identityKey);
+
         useQueueStore.getState().addFromMetadata(
           triggered.metadata,
           settings.defaultQuality,
@@ -116,6 +133,8 @@ export const useSchedulerStore = create<SchedulerState>((set, get) => ({
     } catch (error) {
       set({ error: toErrorModel(error) });
       return 0;
+    } finally {
+      schedulerTickInFlight = false;
     }
   },
   failNext: (error) => resolveSchedulerService().failNext(error),

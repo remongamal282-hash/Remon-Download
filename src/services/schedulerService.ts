@@ -43,15 +43,51 @@ function addRepeatTime(runAt: string, repeat: ScheduleRepeat): string {
   return date.toISOString();
 }
 
-function createMetadata(schedule: ScheduledDownload): VideoMetadata {
+function deriveVideoTitle(sourceUrl: string, fallback: string): string {
+  try {
+    const parsed = new URL(sourceUrl);
+    const videoId = parsed.searchParams.get("v");
+
+    if (videoId) {
+      return videoId;
+    }
+
+    const lastSegment = parsed.pathname.split("/").filter(Boolean).at(-1);
+    if (lastSegment) {
+      return decodeURIComponent(lastSegment.replace(/[-_]/g, " "));
+    }
+  } catch {
+    // Ignore invalid URLs and fall back to the scheduled fallback title.
+  }
+
+  return fallback;
+}
+
+function deriveVideoThumbnail(sourceUrl: string): string {
+  try {
+    const parsed = new URL(sourceUrl);
+    const videoId = parsed.searchParams.get("v");
+
+    if (videoId) {
+      return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    }
+  } catch {
+    // Ignore invalid URLs and fall back to the generic scheduled thumbnail.
+  }
+
+  return "https://picsum.photos/seed/remon-scheduled/320/180";
+}
+
+async function createMetadata(schedule: ScheduledDownload): Promise<VideoMetadata> {
   const triggerNumber = schedule.triggerCount + 1;
+  const fallbackTitle = `Scheduled Download ${triggerNumber}`;
 
   return {
     id: `scheduled-${schedule.id}-${triggerNumber}`,
     sourceUrl: schedule.sourceUrl,
     linkType: "video",
-    thumbnail: `https://picsum.photos/seed/remon-scheduled-${schedule.id}-${triggerNumber}/320/180`,
-    title: `Scheduled Download ${triggerNumber}`,
+    thumbnail: deriveVideoThumbnail(schedule.sourceUrl),
+    title: deriveVideoTitle(schedule.sourceUrl, fallbackTitle),
     channelName: "Scheduled Queue",
     duration: "10:24",
     views: 128000,
@@ -150,9 +186,12 @@ export class MockSchedulerService implements SchedulerService {
     const triggered: SchedulerTickResult["triggered"] = [];
     const nowIso = new Date(now).toISOString();
 
-    this.items = this.items.map((item) => {
+    const nextItems: ScheduledDownload[] = [];
+
+    for (const item of this.items) {
       if (item.status !== "scheduled" || new Date(item.nextRunAt).getTime() > now) {
-        return item;
+        nextItems.push(item);
+        continue;
       }
 
       const triggeredItem: ScheduledDownload = {
@@ -166,11 +205,13 @@ export class MockSchedulerService implements SchedulerService {
 
       triggered.push({
         schedule: triggeredItem,
-        metadata: createMetadata(item)
+        metadata: await createMetadata(item)
       });
 
-      return triggeredItem;
-    });
+      nextItems.push(triggeredItem);
+    }
+
+    this.items = nextItems;
 
     return {
       items: [...this.items],
