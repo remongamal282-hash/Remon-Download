@@ -91,16 +91,15 @@ export class ElectronDownloadService implements DownloadService {
         const updated = {
           ...item,
           status: payload.status,
+          progress: payload.progress,
+          downloadedSize: payload.downloadedSize,
+          speed: payload.speed,
+          eta: payload.eta,
           errorCode: payload.errorCode,
           errorMessage: payload.errorMessage,
           lastUpdatedAt: Date.now()
         };
         this.itemsCache.set(payload.id, updated);
-
-        if (["paused", "canceled", "failed", "completed"].includes(payload.status)) {
-          updated.speed = 0;
-          updated.eta = "--";
-        }
 
         // Notify subscribers of the update
         this.notifyUpdate(payload.id, updated);

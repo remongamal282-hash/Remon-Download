@@ -19,6 +19,9 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { EventEmitter } from "events";
+import { mkdtempSync, writeFileSync, rmSync } from "fs";
+import * as os from "os";
+import * as path from "path";
 import type { ChildProcess } from "child_process";
 import { NativeDownloadService, ProcessExecutor } from "./nativeDownloadService";
 import type { DownloadItem } from "../../src/types/download";
@@ -461,6 +464,48 @@ describe("NativeDownloadService", () => {
       await new Promise((resolve) => setTimeout(resolve, 500));
       expect((await service.getAll()).find((entry) => entry.id === failedItem.id)?.status).toBe("paused");
       expect((await service.getAll()).find((entry) => entry.id === completedItem.id)?.status).toBe("completed");
+    });
+
+    it("should prefer actual on-disk file size over metadata estimate when file is larger", async () => {
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "remon-download-"));
+      const finalFile = path.join(tempDir, "video.mp4");
+      const actualSize = 30 * 1024 * 1024;
+      writeFileSync(finalFile, Buffer.alloc(actualSize));
+
+      try {
+        const result = await (service as any).resolveCompletedFileSize(finalFile, 20 * 1024 * 1024);
+        expect(result).toBe(actualSize);
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("should mark item as completed if stopping after the file has already finished downloading", async () => {
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "remon-stop-complete-"));
+      const fileSize = 30 * 1024 * 1024;
+      const outputPath = path.join(tempDir, "Test Video.mp4");
+      writeFileSync(outputPath, Buffer.alloc(fileSize));
+
+      try {
+        service = new NativeDownloadService(createMockSettings({ downloadFolder: tempDir, ytdlpPath: "yt-dlp" }));
+        const item = createMockDownloadItem({
+          title: "Test Video",
+          format: "mp4",
+          fileSize,
+          downloadedSize: fileSize * 0.98,
+          progress: 98,
+          status: "downloading"
+        });
+
+        await service.add(item);
+        const result = await service.pause(item.id);
+
+        expect(result.status).toBe("completed");
+        expect(result.downloadedSize).toBe(fileSize);
+        expect(result.progress).toBe(100);
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
     });
 
     it("should remove download item", async () => {

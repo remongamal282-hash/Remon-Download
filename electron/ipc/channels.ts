@@ -132,6 +132,11 @@ export interface DownloadProgressPayload {
 export interface DownloadStateChangePayload {
   id: string;
   status: import("../../src/types/download").DownloadStatus;
+  progress: number;
+  downloadedSize: number;
+  fileSize?: number;
+  speed: number;
+  eta: string;
   errorCode?: import("../../src/types/errors").AppErrorCode;
   errorMessage?: string;
 }

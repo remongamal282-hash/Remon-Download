@@ -36,13 +36,60 @@ import type { AnalysisResult, ChannelMetadata, LinkType, PlaylistMetadata, Video
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
-const YTDLP_TIMEOUT_MS = 30000; // 30 seconds - documented technical decision
+const YTDLP_TIMEOUT_MS = 15000; // 15 seconds - optimized for faster response
+const PLAYLIST_TIMEOUT_MS = 25000; // 25 seconds - playlists take longer
 const YOUTUBE_HOSTNAMES = new Set([
   "youtube.com",
   "www.youtube.com",
   "m.youtube.com",
   "youtu.be"
 ]);
+
+// ─── Simple LRU Cache for Metadata ──────────────────────────────────────────
+
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
+class MetadataCache<T> {
+  private cache: Map<string, CacheEntry<T>> = new Map();
+  private maxSize: number;
+  private ttlMs: number;
+
+  constructor(maxSize = 50, ttlMs = 1000 * 60 * 60) {
+    // Default: 50 items, 1 hour TTL
+    this.maxSize = maxSize;
+    this.ttlMs = ttlMs;
+  }
+
+  get(key: string): T | null {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+
+    // Check TTL
+    if (Date.now() - entry.timestamp > this.ttlMs) {
+      this.cache.delete(key);
+      return null;
+    }
+
+    return entry.data;
+  }
+
+  set(key: string, data: T): void {
+    // Remove oldest entry if cache is full
+    if (this.cache.size >= this.maxSize && !this.cache.has(key)) {
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey) this.cache.delete(firstKey);
+    }
+
+    this.cache.set(key, { data, timestamp: Date.now() });
+  }
+
+  clear(): void {
+    this.cache.clear();
+  }
+}
 
 // ─── Process Executor Interface (for Dependency Injection) ─────────────────
 
@@ -268,6 +315,9 @@ function parseChannelMetadata(raw: YtdlpRawPlaylist, url: string): ChannelMetada
 
 // ─── NativeMetadataService ──────────────────────────────────────────────────
 
+// Shared cache instance (singleton) - survives across service instances
+const SHARED_METADATA_CACHE = new MetadataCache<AnalysisResult>(100, 1000 * 60 * 60); // 100 items, 1 hour TTL
+
 export class NativeMetadataService {
   private ytdlpPath: string | null = null;
   private executor: ProcessExecutor;
@@ -319,19 +369,20 @@ export class NativeMetadataService {
 
   /**
    * Spawns yt-dlp process and returns parsed JSON output.
+   * Optimized for speed with faster options.
    */
   private async executeYtdlp(ytdlpPath: string, url: string, isPlaylist = false): Promise<YtdlpRawOutput> {
     return new Promise((resolve, reject) => {
       const args = [
         "--dump-single-json",
         isPlaylist ? "--yes-playlist" : "--no-playlist",
-        ...(isPlaylist ? ["--flat-playlist"] : []),
+        ...(isPlaylist ? ["--flat-playlist", "--playlist-items", "1-5"] : []), // Only first 5 videos for fast preview
         "--skip-download",
         "--no-warnings",
         url
       ];
 
-      const timeout = isPlaylist ? YTDLP_TIMEOUT_MS * 2 : YTDLP_TIMEOUT_MS;
+      const timeout = isPlaylist ? PLAYLIST_TIMEOUT_MS : YTDLP_TIMEOUT_MS;
       const proc = this.executor.spawn(ytdlpPath, args, {
         timeout,
         windowsHide: true
@@ -411,6 +462,13 @@ export class NativeMetadataService {
       throw new Error("unsupported_url");
     }
 
+    // 🚀 Check cache first for instant results
+    const cachedResult = SHARED_METADATA_CACHE.get(trimmedUrl);
+    if (cachedResult) {
+      console.log(`[MetadataService] Cache hit for ${trimmedUrl}`);
+      return cachedResult;
+    }
+
     // Resolve yt-dlp path (cached after first successful resolution)
     if (!this.ytdlpPath) {
       this.ytdlpPath = await this.resolveYtdlpPath();
@@ -419,19 +477,27 @@ export class NativeMetadataService {
     // Classify link type
     const linkType = classifyYouTubeUrl(trimmedUrl);
 
+    let result: AnalysisResult;
+
     // Handle different link types
     if (linkType === "playlist" || linkType === "channel") {
       const raw = await this.executeYtdlp(this.ytdlpPath, trimmedUrl, true);
 
       if (linkType === "playlist") {
-        return parsePlaylistMetadata(raw as YtdlpRawPlaylist, trimmedUrl);
+        result = parsePlaylistMetadata(raw as YtdlpRawPlaylist, trimmedUrl);
       } else {
-        return parseChannelMetadata(raw as YtdlpRawPlaylist, trimmedUrl);
+        result = parseChannelMetadata(raw as YtdlpRawPlaylist, trimmedUrl);
       }
+    } else {
+      // video | shorts | playlist-video
+      const raw = await this.executeYtdlp(this.ytdlpPath, trimmedUrl, false);
+      result = parseVideoMetadata(raw as YtdlpRawVideo, linkType, 1);
     }
 
-    // video | shorts | playlist-video
-    const raw = await this.executeYtdlp(this.ytdlpPath, trimmedUrl, false);
-    return parseVideoMetadata(raw as YtdlpRawVideo, linkType, 1);
+    // 💾 Cache the result for future requests (shared cache)
+    SHARED_METADATA_CACHE.set(trimmedUrl, result);
+    console.log(`[MetadataService] Cached metadata for ${trimmedUrl}`);
+
+    return result;
   }
 }

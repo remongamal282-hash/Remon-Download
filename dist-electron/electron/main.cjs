@@ -69,13 +69,42 @@ var IPC_EVENTS = {
 // electron/services/nativeMetadataService.ts
 var import_child_process = require("child_process");
 var import_promises = require("fs/promises");
-var YTDLP_TIMEOUT_MS = 3e4;
+var YTDLP_TIMEOUT_MS = 15e3;
+var PLAYLIST_TIMEOUT_MS = 25e3;
 var YOUTUBE_HOSTNAMES = /* @__PURE__ */ new Set([
   "youtube.com",
   "www.youtube.com",
   "m.youtube.com",
   "youtu.be"
 ]);
+var MetadataCache = class {
+  cache = /* @__PURE__ */ new Map();
+  maxSize;
+  ttlMs;
+  constructor(maxSize = 50, ttlMs = 1e3 * 60 * 60) {
+    this.maxSize = maxSize;
+    this.ttlMs = ttlMs;
+  }
+  get(key) {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.timestamp > this.ttlMs) {
+      this.cache.delete(key);
+      return null;
+    }
+    return entry.data;
+  }
+  set(key, data) {
+    if (this.cache.size >= this.maxSize && !this.cache.has(key)) {
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey) this.cache.delete(firstKey);
+    }
+    this.cache.set(key, { data, timestamp: Date.now() });
+  }
+  clear() {
+    this.cache.clear();
+  }
+};
 var DefaultProcessExecutor = class {
   spawn(command, args, options) {
     return (0, import_child_process.spawn)(command, args, options);
@@ -203,6 +232,7 @@ function parseChannelMetadata(raw, url) {
     latestVideos
   };
 }
+var SHARED_METADATA_CACHE = new MetadataCache(100, 1e3 * 60 * 60);
 var NativeMetadataService = class {
   constructor(settingsYtdlpPath, executor) {
     this.settingsYtdlpPath = settingsYtdlpPath;
@@ -242,18 +272,20 @@ var NativeMetadataService = class {
   }
   /**
    * Spawns yt-dlp process and returns parsed JSON output.
+   * Optimized for speed with faster options.
    */
   async executeYtdlp(ytdlpPath, url, isPlaylist = false) {
     return new Promise((resolve2, reject) => {
       const args = [
         "--dump-single-json",
         isPlaylist ? "--yes-playlist" : "--no-playlist",
-        ...isPlaylist ? ["--flat-playlist"] : [],
+        ...isPlaylist ? ["--flat-playlist", "--playlist-items", "1-5"] : [],
+        // Only first 5 videos for fast preview
         "--skip-download",
         "--no-warnings",
         url
       ];
-      const timeout = isPlaylist ? YTDLP_TIMEOUT_MS * 2 : YTDLP_TIMEOUT_MS;
+      const timeout = isPlaylist ? PLAYLIST_TIMEOUT_MS : YTDLP_TIMEOUT_MS;
       const proc = this.executor.spawn(ytdlpPath, args, {
         timeout,
         windowsHide: true
@@ -319,32 +351,43 @@ var NativeMetadataService = class {
     if (!isYouTubeUrl(trimmedUrl)) {
       throw new Error("unsupported_url");
     }
+    const cachedResult = SHARED_METADATA_CACHE.get(trimmedUrl);
+    if (cachedResult) {
+      console.log(`[MetadataService] Cache hit for ${trimmedUrl}`);
+      return cachedResult;
+    }
     if (!this.ytdlpPath) {
       this.ytdlpPath = await this.resolveYtdlpPath();
     }
     const linkType = classifyYouTubeUrl(trimmedUrl);
+    let result;
     if (linkType === "playlist" || linkType === "channel") {
-      const raw2 = await this.executeYtdlp(this.ytdlpPath, trimmedUrl, true);
+      const raw = await this.executeYtdlp(this.ytdlpPath, trimmedUrl, true);
       if (linkType === "playlist") {
-        return parsePlaylistMetadata(raw2, trimmedUrl);
+        result = parsePlaylistMetadata(raw, trimmedUrl);
       } else {
-        return parseChannelMetadata(raw2, trimmedUrl);
+        result = parseChannelMetadata(raw, trimmedUrl);
       }
+    } else {
+      const raw = await this.executeYtdlp(this.ytdlpPath, trimmedUrl, false);
+      result = parseVideoMetadata(raw, linkType, 1);
     }
-    const raw = await this.executeYtdlp(this.ytdlpPath, trimmedUrl, false);
-    return parseVideoMetadata(raw, linkType, 1);
+    SHARED_METADATA_CACHE.set(trimmedUrl, result);
+    console.log(`[MetadataService] Cached metadata for ${trimmedUrl}`);
+    return result;
   }
 };
 
 // electron/services/nativeDownloadService.ts
 var import_events = require("events");
+var import_child_process2 = require("child_process");
 var path = __toESM(require("path"), 1);
 var fs = __toESM(require("fs/promises"), 1);
 var import_fs = require("fs");
 var DefaultProcessExecutor2 = class {
   spawn(command, args, options) {
-    const { spawn } = require("child_process");
-    return spawn(command, args, options);
+    const { spawn: spawn2 } = require("child_process");
+    return spawn2(command, args, options);
   }
   checkAccess(path3, mode) {
     return fs.access(path3, mode);
@@ -410,9 +453,9 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       args.push("--continue");
     } else {
       args.push("--no-continue");
+      args.push("--force-overwrites");
     }
     args.push("-o", outputPath);
-    args.push("--force-overwrites");
     if (isAudioFormat) {
       args.push("-f", "bestaudio/best");
       args.push("--extract-audio");
@@ -435,6 +478,10 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     if (this.settings.ffmpegPath && this.settings.ffmpegPath.trim()) {
       args.push("--ffmpeg-location", this.settings.ffmpegPath);
     }
+    args.push("--fragment-retries", "10");
+    args.push("--retries", "10");
+    args.push("--retry-sleep", "5");
+    args.push("-w");
     args.push("--newline");
     args.push("--progress-template", "download:%(progress._percent_str)s|%(progress._downloaded_bytes_str)s|%(progress._total_bytes_str)s|%(progress._speed_str)s|%(progress._eta_str)s");
     args.push("--no-warnings");
@@ -533,9 +580,20 @@ var NativeDownloadService = class extends import_events.EventEmitter {
    * Emits state change event to Main Process
    */
   emitStateChange(id, status, errorCode, errorMessage) {
+    const item = this.items.get(id);
+    if (!item) {
+      console.warn(`[Download] Cannot emit state change for unknown item: ${id}`);
+      return;
+    }
+    console.log(`[Download] State change: ${id} \u2192 ${status} (progress: ${item.progress}%, downloaded: ${item.downloadedSize} bytes)`);
     this.emit("download:state-change", {
       id,
       status,
+      progress: item.progress,
+      downloadedSize: item.downloadedSize,
+      fileSize: item.fileSize,
+      speed: item.speed,
+      eta: item.eta,
       errorCode,
       errorMessage
     });
@@ -572,6 +630,36 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     }
     return downloadFolder;
   }
+  async resolveCompletedFileSize(outputPath, estimatedSize) {
+    try {
+      const stat2 = await fs.stat(outputPath);
+      if (stat2.size > 0) {
+        return stat2.size;
+      }
+    } catch {
+    }
+    return Math.max(estimatedSize, 0);
+  }
+  killProcessTree(proc) {
+    if (!proc || !proc.pid) {
+      return;
+    }
+    try {
+      proc.kill("SIGTERM");
+    } catch {
+    }
+    const isWindows = process.platform === "win32";
+    if (isWindows) {
+      try {
+        const killer = (0, import_child_process2.spawn)("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
+          stdio: "ignore",
+          windowsHide: true
+        });
+        killer.unref();
+      } catch {
+      }
+    }
+  }
   async cleanupStaleDownloadArtifacts(outputPath) {
     const candidates = [outputPath, `${outputPath}.part`];
     for (const candidate of candidates) {
@@ -588,10 +676,29 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     const fileName = `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.${item.format}`;
     const outputDir = this.resolveDownloadFolder(this.settings.downloadFolder);
     const outputPath = path.join(outputDir, fileName);
-    if (!isResume) {
+    const partialPath = `${outputPath}.part`;
+    console.log(`[Download] spawnDownload: ${item.id}`);
+    console.log(`[Download]   Output: ${outputPath}`);
+    console.log(`[Download]   Partial: ${partialPath}`);
+    console.log(`[Download]   isResume: ${isResume}`);
+    let canResume = isResume;
+    let partialFileSize = 0;
+    if (isResume) {
+      try {
+        const stat2 = await fs.stat(partialPath);
+        partialFileSize = stat2.size;
+        console.log(`[Download] \u2713 Partial file found: ${partialFileSize} bytes, will resume`);
+      } catch {
+        console.warn(`[Download] \u2717 Partial file not found, will start fresh`);
+        canResume = false;
+      }
+    }
+    if (!canResume && !isResume) {
+      console.log(`[Download] Cleaning up stale artifacts...`);
       await this.cleanupStaleDownloadArtifacts(outputPath);
     }
-    const args = this.buildYtdlpArgs(item, outputPath, isResume);
+    const args = this.buildYtdlpArgs(item, outputPath, canResume);
+    console.log(`[Download] Starting yt-dlp with ${canResume ? "RESUME" : "FRESH"} (${args.length} args)`);
     const proc = this.executor.spawn(this.ytdlpPath, args, {
       windowsHide: true,
       shell: false
@@ -641,37 +748,55 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     proc.stderr?.on("data", (data) => {
       stderrBuffer += data.toString();
     });
-    proc.on("exit", (code) => {
+    proc.on("exit", async (code) => {
       if (!this.isCurrentProcess(item.id, generation)) {
+        console.log(`[Download] Exit ignored: ${item.id} (stale generation)`);
         return;
       }
       this.activeDownloads.delete(item.id);
+      console.log(`[Download] yt-dlp exited with code: ${code} for ${item.id}`);
       if (code === 0) {
+        console.log(`[Download] \u2713 Download completed successfully: ${item.id}`);
         const currentItem = this.items.get(item.id);
         if (currentItem) {
-          this.updateItemStatus(item.id, "merging");
-          this.emitStateChange(item.id, "merging");
-          setTimeout(() => {
-            const mergingItem = this.items.get(item.id);
-            if (mergingItem && mergingItem.status === "merging") {
-              this.updateItemStatus(item.id, "converting");
-              this.emitStateChange(item.id, "converting");
-              setTimeout(() => {
-                const convertingItem = this.items.get(item.id);
-                if (convertingItem && convertingItem.status === "converting") {
-                  this.updateItemStatus(item.id, "completed", {
-                    progress: 100,
-                    downloadedSize: convertingItem.fileSize,
-                    speed: 0,
-                    eta: "--"
-                  });
-                  this.emitStateChange(item.id, "completed");
-                }
-              }, 100);
-            }
-          }, 100);
+          const finalFileSize = await this.resolveCompletedFileSize(outputPath, currentItem.fileSize);
+          this.updateItemStatus(item.id, "completed", {
+            progress: 100,
+            fileSize: finalFileSize,
+            downloadedSize: finalFileSize,
+            speed: 0,
+            eta: "--"
+          });
+          this.emitStateChange(item.id, "completed");
+          console.log(`[Download] \u2713 Marked as completed: ${item.id} (actual size: ${finalFileSize} bytes)`);
+        }
+      } else if (code === 8 || stderrBuffer.toLowerCase().includes("error") === false) {
+        console.log(`[Download] Exit code ${code} - checking if file exists...`);
+        const currentItem = this.items.get(item.id);
+        if (currentItem && currentItem.progress > 90) {
+          console.log(`[Download] \u2713 File likely complete (progress: ${currentItem.progress}%), marking as completed`);
+          const finalFileSize = await this.resolveCompletedFileSize(outputPath, currentItem.fileSize);
+          this.updateItemStatus(item.id, "completed", {
+            progress: 100,
+            fileSize: finalFileSize,
+            downloadedSize: finalFileSize,
+            speed: 0,
+            eta: "--"
+          });
+          this.emitStateChange(item.id, "completed");
+        } else {
+          console.warn(`[Download] \u2717 Download failed with exit code ${code}`);
+          const errorMessage = this.mapYtdlpError(stderrBuffer, code);
+          this.updateItemStatus(item.id, "failed", {
+            errorCode: errorMessage.code,
+            errorMessage: errorMessage.message,
+            speed: 0,
+            eta: "--"
+          });
+          this.emitStateChange(item.id, "failed", errorMessage.code, errorMessage.message);
         }
       } else {
+        console.warn(`[Download] \u2717 Download failed with exit code ${code}`);
         const currentItem = this.items.get(item.id);
         if (currentItem && currentItem.status !== "paused" && currentItem.status !== "canceled") {
           const errorMessage = this.mapYtdlpError(stderrBuffer, code);
@@ -680,6 +805,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
             errorMessage: errorMessage.message,
             speed: 0,
             eta: "--"
+            // NOTE: Do NOT reset progress or downloadedSize - preserve for resume
           });
           this.emitStateChange(item.id, "failed", errorMessage.code, errorMessage.message);
         }
@@ -701,32 +827,40 @@ var NativeDownloadService = class extends import_events.EventEmitter {
         errorMessage,
         speed: 0,
         eta: "--"
+        // NOTE: Do NOT reset progress or downloadedSize - preserve for resume
       });
       this.emitStateChange(item.id, "failed", errorCode, errorMessage);
     });
   }
   /**
    * Maps yt-dlp stderr output to error codes
+   * Note: yt-dlp may output warnings even on success, so we check for actual error keywords
    */
   mapYtdlpError(stderr, exitCode) {
+    if (!stderr || stderr.trim().length === 0) {
+      return { code: "ytdlp_error", message: `Download failed with exit code ${exitCode}` };
+    }
     const stderrLower = stderr.toLowerCase();
     if (stderrLower.includes("private video") || stderrLower.includes("members-only")) {
       return { code: "video_private", message: "Video is private or members-only" };
     }
     if (stderrLower.includes("video unavailable") || stderrLower.includes("not available")) {
-      return { code: "video_unavailable", message: "Video is unavailable" };
+      return { code: "video_unavailable", message: "Video is unavailable or was removed" };
     }
     if (stderrLower.includes("unsupported url")) {
       return { code: "unsupported_url", message: "URL is not supported" };
     }
-    if (stderrLower.includes("network") || stderrLower.includes("connection") || stderrLower.includes("timeout")) {
-      return { code: "network_error", message: "Network error occurred" };
-    }
     if (stderrLower.includes("http error 4") || stderrLower.includes("403") || stderrLower.includes("404")) {
-      return { code: "video_unavailable", message: "Video not found or access denied" };
+      return { code: "video_unavailable", message: "Video not found or access denied (HTTP 4xx)" };
     }
-    if (stderrLower.includes("ffmpeg") || stderrLower.includes("postprocessor")) {
-      return { code: "ffmpeg_error", message: "FFmpeg processing failed" };
+    if (stderrLower.includes("http error 5") || stderrLower.includes("502") || stderrLower.includes("503")) {
+      return { code: "network_error", message: "Server error - try again later (HTTP 5xx)" };
+    }
+    if (stderrLower.includes("network error") || stderrLower.includes("connection error") || stderrLower.includes("timeout error")) {
+      return { code: "network_error", message: "Network error - check your connection" };
+    }
+    if (stderrLower.includes("ffmpeg error") || stderrLower.includes("postprocessor error")) {
+      return { code: "ffmpeg_error", message: "FFmpeg processing failed - check FFmpeg installation" };
     }
     return { code: "ytdlp_error", message: `Download failed with exit code ${exitCode}` };
   }
@@ -796,9 +930,29 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     }
     const activeDownload = this.activeDownloads.get(id);
     if (activeDownload && activeDownload.process) {
-      activeDownload.process.kill();
+      this.killProcessTree(activeDownload.process);
       this.activeDownloads.delete(id);
       this.nextProcessGeneration(id);
+    }
+    const fileName = `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.${item.format}`;
+    const outputDir = this.resolveDownloadFolder(this.settings.downloadFolder);
+    const outputPath = path.join(outputDir, fileName);
+    try {
+      const stat2 = await fs.stat(outputPath);
+      const actualSize = stat2.size;
+      const shouldComplete = actualSize > 0 && (item.progress >= 95 || actualSize >= Math.max(item.fileSize * 0.9, item.downloadedSize));
+      if (shouldComplete) {
+        this.updateItemStatus(id, "completed", {
+          progress: 100,
+          fileSize: actualSize,
+          downloadedSize: actualSize,
+          speed: 0,
+          eta: "--"
+        });
+        this.emitStateChange(id, "completed");
+        return this.items.get(id);
+      }
+    } catch {
     }
     const currentItem = this.items.get(id);
     this.updateItemStatus(id, "paused", {
@@ -812,6 +966,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
   }
   /**
    * Resume download (restart yt-dlp with --continue)
+   * Includes fallback logic: if resume fails, try from scratch
    */
   async resume(id) {
     const item = this.items.get(id);
@@ -827,21 +982,44 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     if (activeCount >= this.settings.concurrentDownloads) {
       throw new Error("Concurrent download limit reached");
     }
+    console.log(`[Download] Attempting to resume download: ${id}`);
     try {
       await this.spawnDownload(item, true);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : "Unknown error";
-      const errorCode = "ytdlp_error";
-      this.updateItemStatus(id, "failed", {
-        errorCode,
-        errorMessage,
-        speed: 0,
-        eta: "--"
-      });
-      this.emitStateChange(id, "failed", errorCode, errorMessage);
-      throw err;
+      return this.items.get(id);
+    } catch (resumeErr) {
+      const resumeErrorMsg = resumeErr instanceof Error ? resumeErr.message : "Resume failed";
+      console.warn(`[Download] Resume failed: ${resumeErrorMsg}, attempting fresh download...`);
+      try {
+        const fileName = `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.${item.format}`;
+        const outputDir = this.resolveDownloadFolder(this.settings.downloadFolder);
+        const outputPath = path.join(outputDir, fileName);
+        await this.cleanupStaleDownloadArtifacts(outputPath);
+        const freshItem = {
+          ...item,
+          progress: 0,
+          downloadedSize: 0,
+          speed: 0,
+          eta: "--",
+          errorCode: void 0,
+          errorMessage: void 0
+        };
+        this.items.set(id, freshItem);
+        await this.spawnDownload(freshItem, false);
+        console.log(`[Download] Fresh download started after resume fallback: ${id}`);
+        return this.items.get(id);
+      } catch (freshErr) {
+        const errorMessage = freshErr instanceof Error ? freshErr.message : "Download failed after fallback";
+        const errorCode = errorMessage.includes("unavailable") ? "video_unavailable" : errorMessage.includes("network") ? "network_error" : "ytdlp_error";
+        this.updateItemStatus(id, "failed", {
+          errorCode,
+          errorMessage,
+          speed: 0,
+          eta: "--"
+        });
+        this.emitStateChange(id, "failed", errorCode, errorMessage);
+        throw freshErr;
+      }
     }
-    return this.items.get(id);
   }
   /**
    * Cancel download (kill process + optionally clean partial files)
@@ -853,9 +1031,29 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     }
     const activeDownload = this.activeDownloads.get(id);
     if (activeDownload && activeDownload.process) {
-      activeDownload.process.kill();
+      this.killProcessTree(activeDownload.process);
       this.activeDownloads.delete(id);
       this.nextProcessGeneration(id);
+    }
+    const fileName = `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.${item.format}`;
+    const outputDir = this.resolveDownloadFolder(this.settings.downloadFolder);
+    const outputPath = path.join(outputDir, fileName);
+    try {
+      const stat2 = await fs.stat(outputPath);
+      const actualSize = stat2.size;
+      const shouldComplete = actualSize > 0 && (item.progress >= 95 || actualSize >= Math.max(item.fileSize * 0.9, item.downloadedSize));
+      if (shouldComplete) {
+        this.updateItemStatus(id, "completed", {
+          progress: 100,
+          fileSize: actualSize,
+          downloadedSize: actualSize,
+          speed: 0,
+          eta: "--"
+        });
+        this.emitStateChange(id, "completed");
+        return this.items.get(id);
+      }
+    } catch {
     }
     const currentItem = this.items.get(id);
     this.updateItemStatus(id, "canceled", {
@@ -869,6 +1067,9 @@ var NativeDownloadService = class extends import_events.EventEmitter {
   }
   /**
    * Retry failed/canceled download
+   * Strategy:
+   * - Canceled: Try to resume (likely has partial file)
+   * - Failed: Try to resume first, if that fails, start fresh
    */
   async retry(id) {
     const item = this.items.get(id);
@@ -884,11 +1085,11 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     if (activeCount >= this.settings.concurrentDownloads) {
       throw new Error("Concurrent download limit reached");
     }
+    const shouldResume = true;
     const resetItem = {
       ...item,
       status: "retrying",
-      progress: 0,
-      downloadedSize: 0,
+      // Don't reset progress/downloadedSize - let spawnDownload decide based on partial file
       speed: 0,
       eta: "--",
       retryCount: item.retryCount + 1,
@@ -899,7 +1100,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     this.items.set(id, resetItem);
     this.emitStateChange(id, "retrying");
     setTimeout(() => {
-      void this.spawnDownload(resetItem, false);
+      void this.spawnDownload(resetItem, shouldResume);
     }, 0);
     return this.items.get(id) ?? resetItem;
   }
