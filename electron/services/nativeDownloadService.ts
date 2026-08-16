@@ -191,7 +191,7 @@ export class NativeDownloadService extends EventEmitter {
 
     // Fragment retries - improve resume reliability
     args.push("--fragment-retries", "10");
-    
+
     // Retry on network errors
     args.push("--retries", "10");
     args.push("--retry-sleep", "5");
@@ -335,7 +335,7 @@ export class NativeDownloadService extends EventEmitter {
     }
 
     console.log(`[Download] State change: ${id} → ${status} (progress: ${item.progress}%, downloaded: ${item.downloadedSize} bytes)`);
-    
+
     this.emit("download:state-change", {
       id,
       status,
@@ -844,16 +844,16 @@ export class NativeDownloadService extends EventEmitter {
     } catch (resumeErr) {
       const resumeErrorMsg = resumeErr instanceof Error ? resumeErr.message : "Resume failed";
       console.warn(`[Download] Resume failed: ${resumeErrorMsg}, attempting fresh download...`);
-      
+
       // Fallback: clean up partial file and start fresh
       try {
         const fileName = `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.${item.format}`;
         const outputDir = this.resolveDownloadFolder(this.settings.downloadFolder);
         const outputPath = path.join(outputDir, fileName);
-        
+
         // Clean up partial files
         await this.cleanupStaleDownloadArtifacts(outputPath);
-        
+
         // Reset progress and start from beginning
         const freshItem: DownloadItem = {
           ...item,
@@ -865,7 +865,7 @@ export class NativeDownloadService extends EventEmitter {
           errorMessage: undefined
         };
         this.items.set(id, freshItem);
-        
+
         // Try downloading from scratch
         await this.spawnDownload(freshItem, false);
         console.log(`[Download] Fresh download started after resume fallback: ${id}`);
@@ -873,10 +873,10 @@ export class NativeDownloadService extends EventEmitter {
       } catch (freshErr) {
         // Both attempts failed
         const errorMessage = freshErr instanceof Error ? freshErr.message : "Download failed after fallback";
-        const errorCode: import('../../src/types/errors').AppErrorCode = 
+        const errorCode: import('../../src/types/errors').AppErrorCode =
           errorMessage.includes("unavailable") ? "video_unavailable" :
-          errorMessage.includes("network") ? "network_error" :
-          "ytdlp_error";
+            errorMessage.includes("network") ? "network_error" :
+              "ytdlp_error";
 
         this.updateItemStatus(id, "failed", {
           errorCode,
