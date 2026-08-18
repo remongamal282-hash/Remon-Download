@@ -8,15 +8,14 @@ const appIconPath = path.resolve(__dirname, "../../icon.png");
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 720,
-    minWidth: 1024,
-    minHeight: 600,
+    width: 1200,
+    height: 600,
+    minWidth: 900,
+    minHeight: 500,
     title: "Remon Download",
     icon: appIconPath,
     autoHideMenuBar: true,
-    titleBarStyle: "hidden",
-    trafficLightPosition: { x: 18, y: 18 },
+    titleBarStyle: "default",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,

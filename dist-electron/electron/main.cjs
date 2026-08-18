@@ -2231,15 +2231,14 @@ var mainWindow = null;
 var appIconPath = path2.resolve(__dirname, "../../icon.png");
 function createWindow() {
   mainWindow = new import_electron3.BrowserWindow({
-    width: 1280,
-    height: 720,
-    minWidth: 1024,
-    minHeight: 600,
+    width: 1200,
+    height: 600,
+    minWidth: 900,
+    minHeight: 500,
     title: "Remon Download",
     icon: appIconPath,
     autoHideMenuBar: true,
-    titleBarStyle: "hidden",
-    trafficLightPosition: { x: 18, y: 18 },
+    titleBarStyle: "default",
     webPreferences: {
       preload: path2.join(__dirname, "preload.cjs"),
       contextIsolation: true,
