@@ -3,14 +3,14 @@ import type { DownloadStatus } from "../types/download";
 const allowedTransitions: Readonly<Record<DownloadStatus, readonly DownloadStatus[]>> = {
   queued: ["analyzing", "canceled"],
   analyzing: ["downloading", "failed", "canceled"],
-  downloading: ["paused", "merging", "failed", "canceled"],
+  downloading: ["paused", "merging", "completed", "failed", "canceled"],
   paused: ["downloading", "canceled", "failed"],
   merging: ["converting", "failed", "canceled"],
   converting: ["completed", "failed", "canceled"],
   completed: [],
   failed: ["retrying"],
   canceled: ["retrying"],
-  retrying: ["analyzing"]
+  retrying: ["analyzing", "downloading"]
 };
 
 export function canTransition(from: DownloadStatus, to: DownloadStatus): boolean {

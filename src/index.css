@@ -2,6 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Allow dragging the window from the header */
+.app-header-draggable {
+  -webkit-app-region: drag;
+}
+
+/* Disable dragging for interactive elements */
+.app-header-draggable button,
+.app-header-draggable a {
+  -webkit-app-region: no-drag;
+}
+
 :root {
   color-scheme: light;
   font-family:

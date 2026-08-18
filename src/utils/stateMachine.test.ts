@@ -10,6 +10,7 @@ const allowedPairs: readonly [DownloadStatus, DownloadStatus][] = [
   ["analyzing", "canceled"],
   ["downloading", "paused"],
   ["downloading", "merging"],
+  ["downloading", "completed"],
   ["downloading", "failed"],
   ["downloading", "canceled"],
   ["paused", "downloading"],

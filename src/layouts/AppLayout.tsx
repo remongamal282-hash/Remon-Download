@@ -61,7 +61,7 @@ export function AppLayout() {
         </nav>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 items-center justify-end gap-2 border-b border-slate-200 bg-white px-4 dark:border-slate-800 dark:bg-slate-900">
+        <header className="app-header-draggable flex h-16 items-center justify-end gap-2 border-b border-slate-200 bg-white px-4 dark:border-slate-800 dark:bg-slate-900">
           <button
             type="button"
             aria-label="Minimize"
@@ -79,7 +79,7 @@ export function AppLayout() {
             <X aria-hidden="true" size={16} />
           </button>
         </header>
-        <main className="min-w-0 flex-1 p-6">
+        <main className="min-w-0 flex-1 p-4">
           <Outlet />
         </main>
       </div>

@@ -20,6 +20,7 @@ import type { FavoritesService } from "./favoritesService";
 import type { SettingsService } from "./settingsService";
 import type { SchedulerService, SchedulerInput, SchedulerTickResult } from "./schedulerService";
 import type { DownloadProgressPayload, DownloadStateChangePayload } from "../types/electron";
+import { canTransition } from "../utils/stateMachine";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -88,6 +89,16 @@ export class ElectronDownloadService implements DownloadService {
     this.stateChangeUnsubscribe = window.electronAPI!.download.onStateChange((payload: DownloadStateChangePayload) => {
       const item = this.itemsCache.get(payload.id);
       if (item) {
+        // Prevent reverting from terminal/paused states to active states unless it's a valid transition
+        const isValidTransition = canTransition(item.status, payload.status);
+        
+        if (!isValidTransition) {
+          console.warn(
+            `[ElectronDownloadService] Ignoring invalid state change for ${payload.id}: ${item.status} -> ${payload.status}`
+          );
+          return;
+        }
+
         const updated = {
           ...item,
           status: payload.status,
@@ -265,11 +276,33 @@ export class ElectronDownloadService implements DownloadService {
         status = "downloading";
       }
     } else if (item.status === "downloading" && status === "paused") {
-      void window.electronAPI!.download.pause(item.id);
+      // Properly handle pause with error logging
+      if (window.electronAPI?.download?.pause) {
+        window.electronAPI.download.pause(item.id).catch((err) => {
+          console.error(`[ElectronDownloadService] Failed to pause download ${item.id}:`, err);
+        });
+      } else {
+        console.error(`[ElectronDownloadService] pause API not available for ${item.id}`);
+      }
     } else if (item.status === "paused" && status === "downloading") {
-      void window.electronAPI!.download.resume(item.id);
+      // Properly handle resume with error logging
+      console.log(`[ElectronDownloadService] Resume requested for: ${item.id} (progress: ${item.progress}%)`);
+      if (window.electronAPI?.download?.resume) {
+        window.electronAPI.download.resume(item.id).catch((err) => {
+          console.error(`[ElectronDownloadService] Failed to resume download ${item.id}:`, err);
+        });
+      } else {
+        console.error(`[ElectronDownloadService] resume API not available for ${item.id}`);
+      }
     } else if (status === "canceled") {
-      void window.electronAPI!.download.cancel(item.id);
+      // Properly handle cancel with error logging
+      if (window.electronAPI?.download?.cancel) {
+        window.electronAPI.download.cancel(item.id).catch((err) => {
+          console.error(`[ElectronDownloadService] Failed to cancel download ${item.id}:`, err);
+        });
+      } else {
+        console.error(`[ElectronDownloadService] cancel API not available for ${item.id}`);
+      }
     }
 
     const updated = {

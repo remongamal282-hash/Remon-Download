@@ -642,21 +642,48 @@ var NativeDownloadService = class extends import_events.EventEmitter {
   }
   killProcessTree(proc) {
     if (!proc || !proc.pid) {
+      console.warn(`[Download] killProcessTree called but process is null or has no PID`);
       return;
     }
+    const pid = proc.pid;
+    console.log(`[Download] Attempting to kill process tree for PID: ${pid}`);
     try {
-      proc.kill("SIGTERM");
-    } catch {
+      console.log(`[Download] Sending SIGKILL to PID ${pid}...`);
+      proc.kill("SIGKILL");
+      console.log(`[Download] \u2713 Sent SIGKILL to PID ${pid}`);
+    } catch (err) {
+      console.warn(`[Download] SIGKILL failed for PID ${pid}:`, err);
     }
     const isWindows = process.platform === "win32";
     if (isWindows) {
       try {
-        const killer = (0, import_child_process2.spawn)("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
-          stdio: "ignore",
+        console.log(`[Download] Attempting taskkill for PID ${pid} (Windows) with /F /T flags`);
+        const killer = (0, import_child_process2.spawn)("taskkill", ["/PID", String(pid), "/T", "/F"], {
+          stdio: "pipe",
           windowsHide: true
         });
-        killer.unref();
-      } catch {
+        let killOutput = "";
+        let killError = "";
+        killer.stdout?.on("data", (data) => {
+          killOutput += data.toString();
+        });
+        killer.stderr?.on("data", (data) => {
+          killError += data.toString();
+        });
+        killer.on("exit", (code) => {
+          if (code === 0) {
+            console.log(`[Download] \u2713 taskkill succeeded for PID ${pid}: ${killOutput.trim()}`);
+          } else if (code === 128) {
+            console.log(`[Download] \u2713 Process ${pid} not found (already dead), exit code 128`);
+          } else {
+            console.warn(`[Download] taskkill failed with code ${code} for PID ${pid}: ${killError.trim()}`);
+          }
+        });
+        killer.on("error", (err) => {
+          console.warn(`[Download] taskkill error for PID ${pid}:`, err);
+        });
+      } catch (err) {
+        console.warn(`[Download] Failed to spawn taskkill for PID ${pid}:`, err);
       }
     }
   }
@@ -684,13 +711,32 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     let canResume = isResume;
     let partialFileSize = 0;
     if (isResume) {
+      let hasPartialFile = false;
+      let hasMainFile = false;
+      let mainFileSize = 0;
       try {
         const stat2 = await fs.stat(partialPath);
         partialFileSize = stat2.size;
-        console.log(`[Download] \u2713 Partial file found: ${partialFileSize} bytes, will resume`);
+        hasPartialFile = true;
+        console.log(`[Download] \u2713 Partial file found: ${partialFileSize} bytes, will resume from .part`);
       } catch {
-        console.warn(`[Download] \u2717 Partial file not found, will start fresh`);
-        canResume = false;
+        console.log(`[Download] \u2139 Partial .part file not found, checking main output file...`);
+      }
+      if (!hasPartialFile) {
+        try {
+          const stat2 = await fs.stat(outputPath);
+          mainFileSize = stat2.size;
+          hasMainFile = mainFileSize > 0;
+          if (hasMainFile) {
+            console.log(`[Download] \u2713 Main file found: ${mainFileSize} bytes, will continue from it`);
+          }
+        } catch {
+          console.log(`[Download] \u2139 Main output file doesn't exist either`);
+        }
+      }
+      canResume = hasPartialFile || hasMainFile && mainFileSize < item.fileSize;
+      if (!canResume) {
+        console.warn(`[Download] \u2717 Cannot resume: no partial file and main file is either missing or complete, will start fresh`);
       }
     }
     if (!canResume && !isResume) {
@@ -713,11 +759,16 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       lastProgressTime: Date.now()
     };
     this.activeDownloads.set(item.id, activeDownload);
+    console.log(`[Download] \u2713 Added to activeDownloads: ${item.id} (generation: ${generation}, PID: ${proc.pid})`);
     this.updateItemStatus(item.id, "downloading");
     this.emitStateChange(item.id, "downloading");
     let stdoutBuffer = "";
     let stderrBuffer = "";
     proc.stdout?.on("data", (data) => {
+      if (activeDownload.isStopped) {
+        console.log(`[Download] \u26A0 Ignoring stdout data from stopped process: ${item.id}`);
+        return;
+      }
       stdoutBuffer += data.toString();
       const lines = stdoutBuffer.split("\n");
       stdoutBuffer = lines.pop() || "";
@@ -928,11 +979,30 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     if (!item) {
       throw new Error(`Download item not found: ${id}`);
     }
+    console.log(`[Download] PAUSE requested for: ${id} (current status: ${item.status})`);
     const activeDownload = this.activeDownloads.get(id);
     if (activeDownload && activeDownload.process) {
-      this.killProcessTree(activeDownload.process);
+      console.log(`[Download] \u2713 Found active process for ${id}, marking as stopped...`);
+      activeDownload.isStopped = true;
+      const proc = activeDownload.process;
+      if (proc.stdout) {
+        proc.stdout.destroy();
+        console.log(`[Download] \u2713 Closed stdout stream for ${id}`);
+      }
+      if (proc.stderr) {
+        proc.stderr.destroy();
+        console.log(`[Download] \u2713 Closed stderr stream for ${id}`);
+      }
+      if (proc.stdin) {
+        proc.stdin.destroy();
+        console.log(`[Download] \u2713 Closed stdin stream for ${id}`);
+      }
+      this.killProcessTree(proc);
       this.activeDownloads.delete(id);
       this.nextProcessGeneration(id);
+      console.log(`[Download] \u2713 Process killed for ${id}, incremented generation to prevent auto-restart`);
+    } else {
+      console.log(`[Download] \u26A0 No active process found for ${id} (activeDownload exists: ${!!activeDownload}, has process: ${!!activeDownload?.process})`);
     }
     const fileName = `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.${item.format}`;
     const outputDir = this.resolveDownloadFolder(this.settings.downloadFolder);
@@ -942,6 +1012,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       const actualSize = stat2.size;
       const shouldComplete = actualSize > 0 && (item.progress >= 95 || actualSize >= Math.max(item.fileSize * 0.9, item.downloadedSize));
       if (shouldComplete) {
+        console.log(`[Download] File is ${Math.round(actualSize / (item.fileSize || 1) * 100)}% complete, marking as completed instead of paused`);
         this.updateItemStatus(id, "completed", {
           progress: 100,
           fileSize: actualSize,
@@ -953,8 +1024,10 @@ var NativeDownloadService = class extends import_events.EventEmitter {
         return this.items.get(id);
       }
     } catch {
+      console.log(`[Download] Output file doesn't exist yet or can't be accessed`);
     }
     const currentItem = this.items.get(id);
+    console.log(`[Download] \u2713 Setting status to PAUSED for ${id} (progress: ${currentItem?.progress ?? 0}%)`);
     this.updateItemStatus(id, "paused", {
       speed: 0,
       eta: "--",
@@ -982,17 +1055,21 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     if (activeCount >= this.settings.concurrentDownloads) {
       throw new Error("Concurrent download limit reached");
     }
-    console.log(`[Download] Attempting to resume download: ${id}`);
+    console.log(`[Download] RESUME requested for: ${id}`);
+    console.log(`[Download] Current progress: ${item.progress}%, downloaded: ${item.downloadedSize} bytes`);
     try {
+      console.log(`[Download] Attempting to resume with --continue flag...`);
       await this.spawnDownload(item, true);
+      console.log(`[Download] \u2713 Resume started successfully: ${id}`);
       return this.items.get(id);
     } catch (resumeErr) {
       const resumeErrorMsg = resumeErr instanceof Error ? resumeErr.message : "Resume failed";
-      console.warn(`[Download] Resume failed: ${resumeErrorMsg}, attempting fresh download...`);
+      console.warn(`[Download] \u26A0 Resume failed: ${resumeErrorMsg}, attempting fresh download...`);
       try {
         const fileName = `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.${item.format}`;
         const outputDir = this.resolveDownloadFolder(this.settings.downloadFolder);
         const outputPath = path.join(outputDir, fileName);
+        console.log(`[Download] Cleaning up artifacts for fresh download: ${outputPath}`);
         await this.cleanupStaleDownloadArtifacts(outputPath);
         const freshItem = {
           ...item,
@@ -1004,12 +1081,14 @@ var NativeDownloadService = class extends import_events.EventEmitter {
           errorMessage: void 0
         };
         this.items.set(id, freshItem);
+        console.log(`[Download] Starting fresh download after resume failed: ${id}`);
         await this.spawnDownload(freshItem, false);
-        console.log(`[Download] Fresh download started after resume fallback: ${id}`);
+        console.log(`[Download] \u2713 Fresh download started after resume fallback: ${id}`);
         return this.items.get(id);
       } catch (freshErr) {
         const errorMessage = freshErr instanceof Error ? freshErr.message : "Download failed after fallback";
         const errorCode = errorMessage.includes("unavailable") ? "video_unavailable" : errorMessage.includes("network") ? "network_error" : "ytdlp_error";
+        console.error(`[Download] \u2717 Both resume and fresh download failed: ${errorMessage}`);
         this.updateItemStatus(id, "failed", {
           errorCode,
           errorMessage,
@@ -1029,11 +1108,30 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     if (!item) {
       throw new Error(`Download item not found: ${id}`);
     }
+    console.log(`[Download] CANCEL requested for: ${id} (current status: ${item.status})`);
     const activeDownload = this.activeDownloads.get(id);
     if (activeDownload && activeDownload.process) {
-      this.killProcessTree(activeDownload.process);
+      console.log(`[Download] \u2713 Found active process for ${id}, marking as stopped...`);
+      activeDownload.isStopped = true;
+      const proc = activeDownload.process;
+      if (proc.stdout) {
+        proc.stdout.destroy();
+        console.log(`[Download] \u2713 Closed stdout stream for ${id}`);
+      }
+      if (proc.stderr) {
+        proc.stderr.destroy();
+        console.log(`[Download] \u2713 Closed stderr stream for ${id}`);
+      }
+      if (proc.stdin) {
+        proc.stdin.destroy();
+        console.log(`[Download] \u2713 Closed stdin stream for ${id}`);
+      }
+      this.killProcessTree(proc);
       this.activeDownloads.delete(id);
       this.nextProcessGeneration(id);
+      console.log(`[Download] \u2713 Process killed for ${id}`);
+    } else {
+      console.log(`[Download] \u26A0 No active process found for ${id}`);
     }
     const fileName = `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.${item.format}`;
     const outputDir = this.resolveDownloadFolder(this.settings.downloadFolder);
@@ -1043,6 +1141,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       const actualSize = stat2.size;
       const shouldComplete = actualSize > 0 && (item.progress >= 95 || actualSize >= Math.max(item.fileSize * 0.9, item.downloadedSize));
       if (shouldComplete) {
+        console.log(`[Download] File is ${Math.round(actualSize / (item.fileSize || 1) * 100)}% complete, marking as completed instead of canceled`);
         this.updateItemStatus(id, "completed", {
           progress: 100,
           fileSize: actualSize,
@@ -1054,8 +1153,10 @@ var NativeDownloadService = class extends import_events.EventEmitter {
         return this.items.get(id);
       }
     } catch {
+      console.log(`[Download] Output file doesn't exist yet or can't be accessed`);
     }
     const currentItem = this.items.get(id);
+    console.log(`[Download] \u2713 Setting status to CANCELED for ${id} (progress: ${currentItem?.progress ?? 0}%)`);
     this.updateItemStatus(id, "canceled", {
       speed: 0,
       eta: "--",

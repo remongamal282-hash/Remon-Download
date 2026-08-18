@@ -244,6 +244,33 @@ describe("NativeDownloadService", () => {
       expect(parsed?.downloadedSize).toBeGreaterThan(0);
     });
 
+    it("should parse yt-dlp stderr progress lines", async () => {
+      mockExecutor.setSpawnBehavior("yt-dlp", {
+        stdout: "",
+        stderr: "[download] 100.0% of 5.1MiB at 1.9MiB/s ETA 00:00\n",
+        exitCode: 0,
+        delay: 20
+      });
+
+      const item = createMockDownloadItem({ status: "analyzing" });
+      await service.add(item);
+      await service.start(item.id);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const updated = (await service.getAll()).find((entry) => entry.id === item.id)!;
+      expect(updated.status).toBe("completed");
+      expect(updated.progress).toBe(100);
+      expect(updated.downloadedSize).toBeGreaterThan(0);
+    });
+
+    it("should derive downloaded bytes from percent when pipe template omits them", () => {
+      const parsed = (service as any).parseProgressLine("download:100.0%|NA|5.1MiB|1.9MiB/s|00:00");
+
+      expect(parsed?.progress).toBe(100);
+      expect(parsed?.downloadedSize).toBeGreaterThan(0);
+      expect(parsed?.totalSize).toBeGreaterThan(0);
+    });
+
     it("should retry a failed item and start a new yt-dlp process", async () => {
       let spawnCount = 0;
       const customExecutor: ProcessExecutor = {

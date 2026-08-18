@@ -60,6 +60,7 @@ interface ActiveDownload {
   outputPath: string;
   startTime: number;
   lastProgressTime: number;
+  isStopped?: boolean; // Flag to indicate process was stopped/paused
 }
 
 /**
@@ -234,8 +235,11 @@ export class NativeDownloadService extends EventEmitter {
     if (pipeParts.length >= 5) {
       const [percentPart, downloadedPart, totalPart, speedPart, etaPart] = pipeParts;
       const progress = parseFloat(percentPart.trim().replace("%", "")) || 0;
-      const downloadedSize = this.parseSize(downloadedPart.trim());
       const totalSize = this.parseSize(totalPart.trim());
+      let downloadedSize = this.parseSize(downloadedPart.trim());
+      if (downloadedSize === 0 && totalSize > 0 && progress > 0) {
+        downloadedSize = Math.min(totalSize, Math.round((progress / 100) * totalSize));
+      }
       const speed = this.parseSize(speedPart.trim().replace(/\/s$/i, ""));
       const eta = etaPart.trim() === "Unknown ETA" ? "--" : etaPart.trim() || "--";
 
@@ -314,6 +318,95 @@ export class NativeDownloadService extends EventEmitter {
    * Emits progress event to Main Process (which forwards to Renderer)
    */
   private emitProgress(id: string, progress: YtdlpProgress): void {
+    this.emit("download:progress", {
+      id,
+      progress: progress.progress,
+      downloadedSize: progress.downloadedSize,
+      totalSize: progress.totalSize,
+      speed: progress.speed,
+      eta: progress.eta
+    });
+  }
+
+  /**
+   * Ingest yt-dlp stdout/stderr chunks and emit progress updates.
+   * yt-dlp writes progress to stderr by default; custom templates may use stdout.
+   */
+  private ingestProgressOutput(
+    itemId: string,
+    generation: number,
+    activeDownload: ActiveDownload,
+    chunk: string,
+    lineBuffer: { value: string }
+  ): void {
+    if (activeDownload.isStopped) {
+      return;
+    }
+
+    lineBuffer.value += chunk;
+    const lines = lineBuffer.value.split("\n");
+    lineBuffer.value = lines.pop() || "";
+
+    for (const line of lines) {
+      const progress = this.parseProgressLine(line.trim());
+      if (!progress) {
+        continue;
+      }
+
+      if (!this.isCurrentProcess(itemId, generation)) {
+        continue;
+      }
+
+      activeDownload.lastProgressTime = Date.now();
+      this.emitProgress(itemId, progress);
+
+      const currentItem = this.items.get(itemId);
+      if (currentItem) {
+        this.items.set(itemId, {
+          ...currentItem,
+          progress: progress.progress,
+          downloadedSize: progress.downloadedSize,
+          fileSize: progress.totalSize || currentItem.fileSize,
+          speed: progress.speed,
+          eta: progress.eta,
+          lastUpdatedAt: Date.now()
+        });
+      }
+    }
+  }
+
+  private async isOutputFileComplete(outputPath: string, item: DownloadItem): Promise<boolean> {
+    try {
+      const stat = await fs.stat(outputPath);
+      if (stat.size <= 0) {
+        return false;
+      }
+
+      return item.progress >= 95
+        || stat.size >= Math.max(item.fileSize * 0.9, item.downloadedSize);
+    } catch {
+      return false;
+    }
+  }
+
+  private async markDownloadCompleted(id: string, outputPath: string): Promise<void> {
+    const currentItem = this.items.get(id);
+    if (!currentItem) {
+      return;
+    }
+
+    const finalFileSize = await this.resolveCompletedFileSize(outputPath, currentItem.fileSize);
+    this.updateItemStatus(id, "completed", {
+      progress: 100,
+      fileSize: finalFileSize,
+      downloadedSize: finalFileSize,
+      speed: 0,
+      eta: "--"
+    });
+    this.emitStateChange(id, "completed");
+    console.log(`[Download] ✓ Marked as completed: ${id} (actual size: ${finalFileSize} bytes)`);
+  }
+
     this.emit("download:progress", {
       id,
       progress: progress.progress,
@@ -404,25 +497,60 @@ export class NativeDownloadService extends EventEmitter {
 
   private killProcessTree(proc: ChildProcess | null): void {
     if (!proc || !proc.pid) {
+      console.warn(`[Download] killProcessTree called but process is null or has no PID`);
       return;
     }
 
+    const pid = proc.pid;
+    console.log(`[Download] Attempting to kill process tree for PID: ${pid}`);
+
+    // First, try to kill the process directly
     try {
-      proc.kill("SIGTERM");
-    } catch {
-      // Ignore kill errors; fall through to taskkill for Windows.
+      console.log(`[Download] Sending SIGKILL to PID ${pid}...`);
+      proc.kill("SIGKILL");
+      console.log(`[Download] ✓ Sent SIGKILL to PID ${pid}`);
+    } catch (err) {
+      console.warn(`[Download] SIGKILL failed for PID ${pid}:`, err);
     }
 
+    // On Windows, use taskkill to ensure process tree is killed
     const isWindows = process.platform === "win32";
     if (isWindows) {
       try {
-        const killer = spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
-          stdio: "ignore",
+        console.log(`[Download] Attempting taskkill for PID ${pid} (Windows) with /F /T flags`);
+        // Use spawn with synchronous-like behavior by waiting for exit
+        const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+          stdio: "pipe",
           windowsHide: true
         });
-        killer.unref();
-      } catch {
-        // Ignore taskkill failures; the child process may already be gone.
+
+        let killOutput = "";
+        let killError = "";
+
+        killer.stdout?.on("data", (data) => {
+          killOutput += data.toString();
+        });
+
+        killer.stderr?.on("data", (data) => {
+          killError += data.toString();
+        });
+
+        killer.on("exit", (code) => {
+          if (code === 0) {
+            console.log(`[Download] ✓ taskkill succeeded for PID ${pid}: ${killOutput.trim()}`);
+          } else if (code === 128) {
+            // Exit code 128 = Process not found (already dead, which is fine)
+            console.log(`[Download] ✓ Process ${pid} not found (already dead), exit code 128`);
+          } else {
+            console.warn(`[Download] taskkill failed with code ${code} for PID ${pid}: ${killError.trim()}`);
+          }
+        });
+
+        killer.on("error", (err) => {
+          console.warn(`[Download] taskkill error for PID ${pid}:`, err);
+        });
+      } catch (err) {
+        console.warn(`[Download] Failed to spawn taskkill for PID ${pid}:`, err);
       }
     }
   }
@@ -456,17 +584,43 @@ export class NativeDownloadService extends EventEmitter {
     console.log(`[Download]   Partial: ${partialPath}`);
     console.log(`[Download]   isResume: ${isResume}`);
 
-    // Check if partial file exists for resume
+    // Check if we can resume (either partial .part file or incomplete main file)
     let canResume = isResume;
     let partialFileSize = 0;
     if (isResume) {
+      let hasPartialFile = false;
+      let hasMainFile = false;
+      let mainFileSize = 0;
+
+      // Check for .part file
       try {
         const stat = await fs.stat(partialPath);
         partialFileSize = stat.size;
-        console.log(`[Download] ✓ Partial file found: ${partialFileSize} bytes, will resume`);
+        hasPartialFile = true;
+        console.log(`[Download] ✓ Partial file found: ${partialFileSize} bytes, will resume from .part`);
       } catch {
-        console.warn(`[Download] ✗ Partial file not found, will start fresh`);
-        canResume = false; // Partial file doesn't exist, start fresh
+        // .part file doesn't exist, check main file
+        console.log(`[Download] ℹ Partial .part file not found, checking main output file...`);
+      }
+
+      // Also check if main output file exists (even if .part doesn't)
+      if (!hasPartialFile) {
+        try {
+          const stat = await fs.stat(outputPath);
+          mainFileSize = stat.size;
+          hasMainFile = mainFileSize > 0;
+          if (hasMainFile) {
+            console.log(`[Download] ✓ Main file found: ${mainFileSize} bytes, will continue from it`);
+          }
+        } catch {
+          console.log(`[Download] ℹ Main output file doesn't exist either`);
+        }
+      }
+
+      // Can resume if we have either .part file or incomplete main file
+      canResume = hasPartialFile || (hasMainFile && mainFileSize < item.fileSize);
+      if (!canResume) {
+        console.warn(`[Download] ✗ Cannot resume: no partial file and main file is either missing or complete, will start fresh`);
       }
     }
 
@@ -498,52 +652,24 @@ export class NativeDownloadService extends EventEmitter {
       lastProgressTime: Date.now()
     };
     this.activeDownloads.set(item.id, activeDownload);
+    console.log(`[Download] ✓ Added to activeDownloads: ${item.id} (generation: ${generation}, PID: ${proc.pid})`);
 
     // Update item status to downloading
     this.updateItemStatus(item.id, "downloading");
     this.emitStateChange(item.id, "downloading");
 
-    let stdoutBuffer = "";
+    let stdoutBuffer = { value: "" };
+    let stderrProgressBuffer = { value: "" };
     let stderrBuffer = "";
 
-    // Handle stdout (progress)
     proc.stdout?.on("data", (data) => {
-      stdoutBuffer += data.toString();
-      const lines = stdoutBuffer.split("\n");
-      stdoutBuffer = lines.pop() || ""; // Keep incomplete line in buffer
-
-      for (const line of lines) {
-        const progress = this.parseProgressLine(line.trim());
-        if (!progress) {
-          continue;
-        }
-
-        if (!this.isCurrentProcess(item.id, generation)) {
-          continue;
-        }
-
-        activeDownload.lastProgressTime = Date.now();
-        this.emitProgress(item.id, progress);
-
-        // Update item progress
-        const currentItem = this.items.get(item.id);
-        if (currentItem) {
-          this.items.set(item.id, {
-            ...currentItem,
-            progress: progress.progress,
-            downloadedSize: progress.downloadedSize,
-            fileSize: progress.totalSize || currentItem.fileSize,
-            speed: progress.speed,
-            eta: progress.eta,
-            lastUpdatedAt: Date.now()
-          });
-        }
-      }
+      this.ingestProgressOutput(item.id, generation, activeDownload, data.toString(), stdoutBuffer);
     });
 
-    // Handle stderr (errors)
     proc.stderr?.on("data", (data) => {
-      stderrBuffer += data.toString();
+      const chunk = data.toString();
+      stderrBuffer += chunk;
+      this.ingestProgressOutput(item.id, generation, activeDownload, chunk, stderrProgressBuffer);
     });
 
     // Handle process exit
@@ -557,66 +683,50 @@ export class NativeDownloadService extends EventEmitter {
 
       console.log(`[Download] yt-dlp exited with code: ${code} for ${item.id}`);
 
-      if (code === 0) {
+      const currentItem = this.items.get(item.id);
+      if (!currentItem) {
+        return;
+      }
+
+      const fileComplete = await this.isOutputFileComplete(outputPath, currentItem);
+
+      if (code === 0 || fileComplete) {
         console.log(`[Download] ✓ Download completed successfully: ${item.id}`);
-        const currentItem = this.items.get(item.id);
-        if (currentItem) {
-          const finalFileSize = await this.resolveCompletedFileSize(outputPath, currentItem.fileSize);
-          this.updateItemStatus(item.id, "completed", {
-            progress: 100,
-            fileSize: finalFileSize,
-            downloadedSize: finalFileSize,
-            speed: 0,
-            eta: "--"
-          });
-          this.emitStateChange(item.id, "completed");
-          console.log(`[Download] ✓ Marked as completed: ${item.id} (actual size: ${finalFileSize} bytes)`);
-        }
-      } else if (code === 8 || stderrBuffer.toLowerCase().includes("error") === false) {
-        // Code 8 often means success with FFmpeg warnings, or process was killed
+        await this.markDownloadCompleted(item.id, outputPath);
+        return;
+      }
+
+      if (code === 8 || stderrBuffer.toLowerCase().includes("error") === false) {
         console.log(`[Download] Exit code ${code} - checking if file exists...`);
-        // Check if file was actually created despite non-zero exit code
-        // This can happen with timeouts but successful downloads
-        const currentItem = this.items.get(item.id);
-        if (currentItem && currentItem.progress > 90) {
-          console.log(`[Download] ✓ File likely complete (progress: ${currentItem.progress}%), marking as completed`);
-          const finalFileSize = await this.resolveCompletedFileSize(outputPath, currentItem.fileSize);
-          this.updateItemStatus(item.id, "completed", {
-            progress: 100,
-            fileSize: finalFileSize,
-            downloadedSize: finalFileSize,
-            speed: 0,
-            eta: "--"
-          });
-          this.emitStateChange(item.id, "completed");
-        } else {
-          // Actual failure
-          console.warn(`[Download] ✗ Download failed with exit code ${code}`);
-          const errorMessage = this.mapYtdlpError(stderrBuffer, code);
-          this.updateItemStatus(item.id, "failed", {
-            errorCode: errorMessage.code,
-            errorMessage: errorMessage.message,
-            speed: 0,
-            eta: "--"
-          });
-          this.emitStateChange(item.id, "failed", errorMessage.code, errorMessage.message);
+        if (fileComplete) {
+          console.log(`[Download] ✓ Output file complete despite exit code ${code}, marking as completed`);
+          await this.markDownloadCompleted(item.id, outputPath);
+          return;
         }
-      } else {
-        // Failure - map error but PRESERVE progress for retry
+
         console.warn(`[Download] ✗ Download failed with exit code ${code}`);
-        const currentItem = this.items.get(item.id);
-        if (currentItem && currentItem.status !== "paused" && currentItem.status !== "canceled") {
-          const errorMessage = this.mapYtdlpError(stderrBuffer, code);
-          // Keep progress and downloadedSize so retry can resume
-          this.updateItemStatus(item.id, "failed", {
-            errorCode: errorMessage.code,
-            errorMessage: errorMessage.message,
-            speed: 0,
-            eta: "--"
-            // NOTE: Do NOT reset progress or downloadedSize - preserve for resume
-          });
-          this.emitStateChange(item.id, "failed", errorMessage.code, errorMessage.message);
-        }
+        const errorMessage = this.mapYtdlpError(stderrBuffer, code);
+        this.updateItemStatus(item.id, "failed", {
+          errorCode: errorMessage.code,
+          errorMessage: errorMessage.message,
+          speed: 0,
+          eta: "--"
+        });
+        this.emitStateChange(item.id, "failed", errorMessage.code, errorMessage.message);
+        return;
+      }
+
+      // Failure - map error but PRESERVE progress for retry
+      console.warn(`[Download] ✗ Download failed with exit code ${code}`);
+      if (currentItem.status !== "paused" && currentItem.status !== "canceled") {
+        const errorMessage = this.mapYtdlpError(stderrBuffer, code);
+        this.updateItemStatus(item.id, "failed", {
+          errorCode: errorMessage.code,
+          errorMessage: errorMessage.message,
+          speed: 0,
+          eta: "--"
+        });
+        this.emitStateChange(item.id, "failed", errorMessage.code, errorMessage.message);
       }
     });
 
@@ -771,11 +881,38 @@ export class NativeDownloadService extends EventEmitter {
       throw new Error(`Download item not found: ${id}`);
     }
 
+    console.log(`[Download] PAUSE requested for: ${id} (current status: ${item.status})`);
+
     const activeDownload = this.activeDownloads.get(id);
     if (activeDownload && activeDownload.process) {
-      this.killProcessTree(activeDownload.process);
+      console.log(`[Download] ✓ Found active process for ${id}, marking as stopped...`);
+      
+      // Mark as stopped FIRST to ignore any pending data
+      activeDownload.isStopped = true;
+      
+      const proc = activeDownload.process;
+      
+      // Close streams to prevent further data
+      if (proc.stdout) {
+        proc.stdout.destroy();
+        console.log(`[Download] ✓ Closed stdout stream for ${id}`);
+      }
+      if (proc.stderr) {
+        proc.stderr.destroy();
+        console.log(`[Download] ✓ Closed stderr stream for ${id}`);
+      }
+      if (proc.stdin) {
+        proc.stdin.destroy();
+        console.log(`[Download] ✓ Closed stdin stream for ${id}`);
+      }
+      
+      // Then kill the process
+      this.killProcessTree(proc);
       this.activeDownloads.delete(id);
       this.nextProcessGeneration(id);
+      console.log(`[Download] ✓ Process killed for ${id}, incremented generation to prevent auto-restart`);
+    } else {
+      console.log(`[Download] ⚠ No active process found for ${id} (activeDownload exists: ${!!activeDownload}, has process: ${!!activeDownload?.process})`);
     }
 
     const fileName = `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.${item.format}`;
@@ -788,6 +925,7 @@ export class NativeDownloadService extends EventEmitter {
       const shouldComplete = actualSize > 0 && ((item.progress >= 95) || actualSize >= Math.max(item.fileSize * 0.9, item.downloadedSize));
 
       if (shouldComplete) {
+        console.log(`[Download] File is ${Math.round((actualSize / (item.fileSize || 1)) * 100)}% complete, marking as completed instead of paused`);
         this.updateItemStatus(id, "completed", {
           progress: 100,
           fileSize: actualSize,
@@ -800,9 +938,11 @@ export class NativeDownloadService extends EventEmitter {
       }
     } catch {
       // File may not exist yet; keep the paused/canceled state.
+      console.log(`[Download] Output file doesn't exist yet or can't be accessed`);
     }
 
     const currentItem = this.items.get(id);
+    console.log(`[Download] ✓ Setting status to PAUSED for ${id} (progress: ${currentItem?.progress ?? 0}%)`);
     this.updateItemStatus(id, "paused", {
       speed: 0,
       eta: "--",
@@ -837,13 +977,16 @@ export class NativeDownloadService extends EventEmitter {
     }
 
     // First attempt: try resuming from partial file
-    console.log(`[Download] Attempting to resume download: ${id}`);
+    console.log(`[Download] RESUME requested for: ${id}`);
+    console.log(`[Download] Current progress: ${item.progress}%, downloaded: ${item.downloadedSize} bytes`);
     try {
+      console.log(`[Download] Attempting to resume with --continue flag...`);
       await this.spawnDownload(item, true);
+      console.log(`[Download] ✓ Resume started successfully: ${id}`);
       return this.items.get(id)!;
     } catch (resumeErr) {
       const resumeErrorMsg = resumeErr instanceof Error ? resumeErr.message : "Resume failed";
-      console.warn(`[Download] Resume failed: ${resumeErrorMsg}, attempting fresh download...`);
+      console.warn(`[Download] ⚠ Resume failed: ${resumeErrorMsg}, attempting fresh download...`);
 
       // Fallback: clean up partial file and start fresh
       try {
@@ -851,6 +994,7 @@ export class NativeDownloadService extends EventEmitter {
         const outputDir = this.resolveDownloadFolder(this.settings.downloadFolder);
         const outputPath = path.join(outputDir, fileName);
 
+        console.log(`[Download] Cleaning up artifacts for fresh download: ${outputPath}`);
         // Clean up partial files
         await this.cleanupStaleDownloadArtifacts(outputPath);
 
@@ -867,8 +1011,9 @@ export class NativeDownloadService extends EventEmitter {
         this.items.set(id, freshItem);
 
         // Try downloading from scratch
+        console.log(`[Download] Starting fresh download after resume failed: ${id}`);
         await this.spawnDownload(freshItem, false);
-        console.log(`[Download] Fresh download started after resume fallback: ${id}`);
+        console.log(`[Download] ✓ Fresh download started after resume fallback: ${id}`);
         return this.items.get(id)!;
       } catch (freshErr) {
         // Both attempts failed
@@ -878,6 +1023,7 @@ export class NativeDownloadService extends EventEmitter {
             errorMessage.includes("network") ? "network_error" :
               "ytdlp_error";
 
+        console.error(`[Download] ✗ Both resume and fresh download failed: ${errorMessage}`);
         this.updateItemStatus(id, "failed", {
           errorCode,
           errorMessage,
@@ -900,11 +1046,38 @@ export class NativeDownloadService extends EventEmitter {
       throw new Error(`Download item not found: ${id}`);
     }
 
+    console.log(`[Download] CANCEL requested for: ${id} (current status: ${item.status})`);
+
     const activeDownload = this.activeDownloads.get(id);
     if (activeDownload && activeDownload.process) {
-      this.killProcessTree(activeDownload.process);
+      console.log(`[Download] ✓ Found active process for ${id}, marking as stopped...`);
+      
+      // Mark as stopped FIRST to ignore any pending data
+      activeDownload.isStopped = true;
+      
+      const proc = activeDownload.process;
+      
+      // Close streams first to prevent any further data
+      if (proc.stdout) {
+        proc.stdout.destroy();
+        console.log(`[Download] ✓ Closed stdout stream for ${id}`);
+      }
+      if (proc.stderr) {
+        proc.stderr.destroy();
+        console.log(`[Download] ✓ Closed stderr stream for ${id}`);
+      }
+      if (proc.stdin) {
+        proc.stdin.destroy();
+        console.log(`[Download] ✓ Closed stdin stream for ${id}`);
+      }
+      
+      // Then kill the process
+      this.killProcessTree(proc);
       this.activeDownloads.delete(id);
       this.nextProcessGeneration(id);
+      console.log(`[Download] ✓ Process killed for ${id}`);
+    } else {
+      console.log(`[Download] ⚠ No active process found for ${id}`);
     }
 
     const fileName = `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.${item.format}`;
@@ -917,6 +1090,7 @@ export class NativeDownloadService extends EventEmitter {
       const shouldComplete = actualSize > 0 && ((item.progress >= 95) || actualSize >= Math.max(item.fileSize * 0.9, item.downloadedSize));
 
       if (shouldComplete) {
+        console.log(`[Download] File is ${Math.round((actualSize / (item.fileSize || 1)) * 100)}% complete, marking as completed instead of canceled`);
         this.updateItemStatus(id, "completed", {
           progress: 100,
           fileSize: actualSize,
@@ -929,9 +1103,11 @@ export class NativeDownloadService extends EventEmitter {
       }
     } catch {
       // File may not exist yet; keep the paused/canceled state.
+      console.log(`[Download] Output file doesn't exist yet or can't be accessed`);
     }
 
     const currentItem = this.items.get(id);
+    console.log(`[Download] ✓ Setting status to CANCELED for ${id} (progress: ${currentItem?.progress ?? 0}%)`);
     this.updateItemStatus(id, "canceled", {
       speed: 0,
       eta: "--",

@@ -1,4 +1,4 @@
-import { Check, Loader2, Plus, X } from "lucide-react";
+import { Check, Loader2, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
@@ -16,6 +16,7 @@ export function DashboardPage() {
   const result = useMetadataStore((state) => state.result);
   const error = useMetadataStore((state) => state.error);
   const isAnalyzing = useMetadataStore((state) => state.isAnalyzing);
+  const clearMetadata = useMetadataStore((state) => state.clear);
   const addFromMetadata = useQueueStore((state) => state.addFromMetadata);
   const addManyFromMetadata = useQueueStore((state) => state.addManyFromMetadata);
   const settings = useSettingsStore((state) => state.settings);
@@ -206,6 +207,11 @@ export function DashboardPage() {
           onAddAll={addAll}
           onQualityChange={setSelectedQuality}
           onFormatChange={setSelectedFormat}
+          onClearResult={() => {
+            resetField("url");
+            setValue("url", "", { shouldValidate: true, shouldDirty: true });
+            clearMetadata();
+          }}
         />
       ) : null}
     </section>
@@ -225,6 +231,7 @@ interface AnalysisPanelProps {
   onAddAll: () => void;
   onQualityChange: (quality: string) => void;
   onFormatChange: (format: string) => void;
+  onClearResult: () => void;
 }
 
 function AnalysisPanel({
@@ -239,7 +246,8 @@ function AnalysisPanel({
   onAddSelected,
   onAddAll,
   onQualityChange,
-  onFormatChange
+  onFormatChange,
+  onClearResult
 }: AnalysisPanelProps) {
   const { t } = useTranslation();
 
@@ -332,14 +340,25 @@ function AnalysisPanel({
               </select>
             </label>
           </div>
-          <button
-            type="button"
-            onClick={() => onAddSingle(result, selectedQuality, selectedFormat)}
-            className="mt-4 inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
-          >
-            <Check aria-hidden="true" size={18} />
-            {t("dashboard.addToQueue")}
-          </button>
+          <div className="mt-4 flex gap-2">
+            <button
+              type="button"
+              onClick={() => onAddSingle(result, selectedQuality, selectedFormat)}
+              className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+            >
+              <Check aria-hidden="true" size={18} />
+              {t("dashboard.addToQueue")}
+            </button>
+            <button
+              type="button"
+              aria-label={t("dashboard.clearResult") || "Clear"}
+              title={t("dashboard.clearResult") || "Clear"}
+              onClick={onClearResult}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 text-slate-600 transition hover:bg-red-50 hover:text-red-600 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-red-500/10 dark:hover:text-red-400"
+            >
+              <Trash2 aria-hidden="true" size={18} />
+            </button>
+          </div>
         </div>
       </div>
     </article>
