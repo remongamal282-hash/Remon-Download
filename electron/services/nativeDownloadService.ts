@@ -179,6 +179,9 @@ export class NativeDownloadService extends EventEmitter {
       args.push("--remux-video", item.format);
     }
 
+    // YouTube client workaround - use android client to bypass restrictions
+    args.push("--extractor-args", "youtube:player_client=android");
+
     // Speed limit
     if (this.settings.speedLimit !== "unlimited") {
       const limitKB = Math.floor(this.settings.speedLimit / 1024);
@@ -196,6 +199,9 @@ export class NativeDownloadService extends EventEmitter {
     // Retry on network errors
     args.push("--retries", "10");
     args.push("--retry-sleep", "5");
+
+    // Geo-bypass - helps with regional restrictions and rate limiting
+    args.push("--geo-bypass");
 
     // Wait for availability (helps with rate limiting)
     args.push("-w");
@@ -382,8 +388,14 @@ export class NativeDownloadService extends EventEmitter {
         return false;
       }
 
-      return item.progress >= 95
-        || stat.size >= Math.max(item.fileSize * 0.9, item.downloadedSize);
+      // Consider complete if:
+      // 1. Progress is 95% or higher, OR
+      // 2. File size is at least 90% of expected size, OR
+      // 3. File size is equal or very close to expected fileSize
+      const isNearComplete = stat.size >= (item.fileSize * 0.9);
+      const isEqual = stat.size >= item.fileSize * 0.99; // 99% to account for rounding
+      
+      return item.progress >= 95 || isNearComplete || isEqual;
     } catch {
       return false;
     }
@@ -405,16 +417,6 @@ export class NativeDownloadService extends EventEmitter {
     });
     this.emitStateChange(id, "completed");
     console.log(`[Download] ✓ Marked as completed: ${id} (actual size: ${finalFileSize} bytes)`);
-  }
-
-    this.emit("download:progress", {
-      id,
-      progress: progress.progress,
-      downloadedSize: progress.downloadedSize,
-      totalSize: progress.totalSize,
-      speed: progress.speed,
-      eta: progress.eta
-    });
   }
 
   /**
@@ -922,7 +924,9 @@ export class NativeDownloadService extends EventEmitter {
     try {
       const stat = await fs.stat(outputPath);
       const actualSize = stat.size;
-      const shouldComplete = actualSize > 0 && ((item.progress >= 95) || actualSize >= Math.max(item.fileSize * 0.9, item.downloadedSize));
+      const isNearComplete = actualSize >= (item.fileSize * 0.9);
+      const isEqual = actualSize >= item.fileSize * 0.99; // 99% to account for rounding
+      const shouldComplete = actualSize > 0 && ((item.progress >= 95) || isNearComplete || isEqual);
 
       if (shouldComplete) {
         console.log(`[Download] File is ${Math.round((actualSize / (item.fileSize || 1)) * 100)}% complete, marking as completed instead of paused`);
@@ -1087,7 +1091,9 @@ export class NativeDownloadService extends EventEmitter {
     try {
       const stat = await fs.stat(outputPath);
       const actualSize = stat.size;
-      const shouldComplete = actualSize > 0 && ((item.progress >= 95) || actualSize >= Math.max(item.fileSize * 0.9, item.downloadedSize));
+      const isNearComplete = actualSize >= (item.fileSize * 0.9);
+      const isEqual = actualSize >= item.fileSize * 0.99; // 99% to account for rounding
+      const shouldComplete = actualSize > 0 && ((item.progress >= 95) || isNearComplete || isEqual);
 
       if (shouldComplete) {
         console.log(`[Download] File is ${Math.round((actualSize / (item.fileSize || 1)) * 100)}% complete, marking as completed instead of canceled`);

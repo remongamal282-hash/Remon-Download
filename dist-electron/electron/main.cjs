@@ -471,6 +471,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       args.push("--merge-output-format", item.format);
       args.push("--remux-video", item.format);
     }
+    args.push("--extractor-args", "youtube:player_client=android");
     if (this.settings.speedLimit !== "unlimited") {
       const limitKB = Math.floor(this.settings.speedLimit / 1024);
       args.push("-r", `${limitKB}K`);
@@ -481,6 +482,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     args.push("--fragment-retries", "10");
     args.push("--retries", "10");
     args.push("--retry-sleep", "5");
+    args.push("--geo-bypass");
     args.push("-w");
     args.push("--newline");
     args.push("--progress-template", "download:%(progress._percent_str)s|%(progress._downloaded_bytes_str)s|%(progress._total_bytes_str)s|%(progress._speed_str)s|%(progress._eta_str)s");
@@ -504,8 +506,11 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     if (pipeParts.length >= 5) {
       const [percentPart, downloadedPart, totalPart, speedPart, etaPart] = pipeParts;
       const progress2 = parseFloat(percentPart.trim().replace("%", "")) || 0;
-      const downloadedSize2 = this.parseSize(downloadedPart.trim());
       const totalSize2 = this.parseSize(totalPart.trim());
+      let downloadedSize2 = this.parseSize(downloadedPart.trim());
+      if (downloadedSize2 === 0 && totalSize2 > 0 && progress2 > 0) {
+        downloadedSize2 = Math.min(totalSize2, Math.round(progress2 / 100 * totalSize2));
+      }
       const speed2 = this.parseSize(speedPart.trim().replace(/\/s$/i, ""));
       const eta2 = etaPart.trim() === "Unknown ETA" ? "--" : etaPart.trim() || "--";
       return {
@@ -575,6 +580,70 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       speed: progress.speed,
       eta: progress.eta
     });
+  }
+  /**
+   * Ingest yt-dlp stdout/stderr chunks and emit progress updates.
+   * yt-dlp writes progress to stderr by default; custom templates may use stdout.
+   */
+  ingestProgressOutput(itemId, generation, activeDownload, chunk, lineBuffer) {
+    if (activeDownload.isStopped) {
+      return;
+    }
+    lineBuffer.value += chunk;
+    const lines = lineBuffer.value.split("\n");
+    lineBuffer.value = lines.pop() || "";
+    for (const line of lines) {
+      const progress = this.parseProgressLine(line.trim());
+      if (!progress) {
+        continue;
+      }
+      if (!this.isCurrentProcess(itemId, generation)) {
+        continue;
+      }
+      activeDownload.lastProgressTime = Date.now();
+      this.emitProgress(itemId, progress);
+      const currentItem = this.items.get(itemId);
+      if (currentItem) {
+        this.items.set(itemId, {
+          ...currentItem,
+          progress: progress.progress,
+          downloadedSize: progress.downloadedSize,
+          fileSize: progress.totalSize || currentItem.fileSize,
+          speed: progress.speed,
+          eta: progress.eta,
+          lastUpdatedAt: Date.now()
+        });
+      }
+    }
+  }
+  async isOutputFileComplete(outputPath, item) {
+    try {
+      const stat2 = await fs.stat(outputPath);
+      if (stat2.size <= 0) {
+        return false;
+      }
+      const isNearComplete = stat2.size >= item.fileSize * 0.9;
+      const isEqual = stat2.size >= item.fileSize * 0.99;
+      return item.progress >= 95 || isNearComplete || isEqual;
+    } catch {
+      return false;
+    }
+  }
+  async markDownloadCompleted(id, outputPath) {
+    const currentItem = this.items.get(id);
+    if (!currentItem) {
+      return;
+    }
+    const finalFileSize = await this.resolveCompletedFileSize(outputPath, currentItem.fileSize);
+    this.updateItemStatus(id, "completed", {
+      progress: 100,
+      fileSize: finalFileSize,
+      downloadedSize: finalFileSize,
+      speed: 0,
+      eta: "--"
+    });
+    this.emitStateChange(id, "completed");
+    console.log(`[Download] \u2713 Marked as completed: ${id} (actual size: ${finalFileSize} bytes)`);
   }
   /**
    * Emits state change event to Main Process
@@ -762,42 +831,16 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     console.log(`[Download] \u2713 Added to activeDownloads: ${item.id} (generation: ${generation}, PID: ${proc.pid})`);
     this.updateItemStatus(item.id, "downloading");
     this.emitStateChange(item.id, "downloading");
-    let stdoutBuffer = "";
+    let stdoutBuffer = { value: "" };
+    let stderrProgressBuffer = { value: "" };
     let stderrBuffer = "";
     proc.stdout?.on("data", (data) => {
-      if (activeDownload.isStopped) {
-        console.log(`[Download] \u26A0 Ignoring stdout data from stopped process: ${item.id}`);
-        return;
-      }
-      stdoutBuffer += data.toString();
-      const lines = stdoutBuffer.split("\n");
-      stdoutBuffer = lines.pop() || "";
-      for (const line of lines) {
-        const progress = this.parseProgressLine(line.trim());
-        if (!progress) {
-          continue;
-        }
-        if (!this.isCurrentProcess(item.id, generation)) {
-          continue;
-        }
-        activeDownload.lastProgressTime = Date.now();
-        this.emitProgress(item.id, progress);
-        const currentItem = this.items.get(item.id);
-        if (currentItem) {
-          this.items.set(item.id, {
-            ...currentItem,
-            progress: progress.progress,
-            downloadedSize: progress.downloadedSize,
-            fileSize: progress.totalSize || currentItem.fileSize,
-            speed: progress.speed,
-            eta: progress.eta,
-            lastUpdatedAt: Date.now()
-          });
-        }
-      }
+      this.ingestProgressOutput(item.id, generation, activeDownload, data.toString(), stdoutBuffer);
     });
     proc.stderr?.on("data", (data) => {
-      stderrBuffer += data.toString();
+      const chunk = data.toString();
+      stderrBuffer += chunk;
+      this.ingestProgressOutput(item.id, generation, activeDownload, chunk, stderrProgressBuffer);
     });
     proc.on("exit", async (code) => {
       if (!this.isCurrentProcess(item.id, generation)) {
@@ -806,60 +849,44 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       }
       this.activeDownloads.delete(item.id);
       console.log(`[Download] yt-dlp exited with code: ${code} for ${item.id}`);
-      if (code === 0) {
+      const currentItem = this.items.get(item.id);
+      if (!currentItem) {
+        return;
+      }
+      const fileComplete = await this.isOutputFileComplete(outputPath, currentItem);
+      if (code === 0 || fileComplete) {
         console.log(`[Download] \u2713 Download completed successfully: ${item.id}`);
-        const currentItem = this.items.get(item.id);
-        if (currentItem) {
-          const finalFileSize = await this.resolveCompletedFileSize(outputPath, currentItem.fileSize);
-          this.updateItemStatus(item.id, "completed", {
-            progress: 100,
-            fileSize: finalFileSize,
-            downloadedSize: finalFileSize,
-            speed: 0,
-            eta: "--"
-          });
-          this.emitStateChange(item.id, "completed");
-          console.log(`[Download] \u2713 Marked as completed: ${item.id} (actual size: ${finalFileSize} bytes)`);
-        }
-      } else if (code === 8 || stderrBuffer.toLowerCase().includes("error") === false) {
+        await this.markDownloadCompleted(item.id, outputPath);
+        return;
+      }
+      if (code === 8 || stderrBuffer.toLowerCase().includes("error") === false) {
         console.log(`[Download] Exit code ${code} - checking if file exists...`);
-        const currentItem = this.items.get(item.id);
-        if (currentItem && currentItem.progress > 90) {
-          console.log(`[Download] \u2713 File likely complete (progress: ${currentItem.progress}%), marking as completed`);
-          const finalFileSize = await this.resolveCompletedFileSize(outputPath, currentItem.fileSize);
-          this.updateItemStatus(item.id, "completed", {
-            progress: 100,
-            fileSize: finalFileSize,
-            downloadedSize: finalFileSize,
-            speed: 0,
-            eta: "--"
-          });
-          this.emitStateChange(item.id, "completed");
-        } else {
-          console.warn(`[Download] \u2717 Download failed with exit code ${code}`);
-          const errorMessage = this.mapYtdlpError(stderrBuffer, code);
-          this.updateItemStatus(item.id, "failed", {
-            errorCode: errorMessage.code,
-            errorMessage: errorMessage.message,
-            speed: 0,
-            eta: "--"
-          });
-          this.emitStateChange(item.id, "failed", errorMessage.code, errorMessage.message);
+        if (fileComplete) {
+          console.log(`[Download] \u2713 Output file complete despite exit code ${code}, marking as completed`);
+          await this.markDownloadCompleted(item.id, outputPath);
+          return;
         }
-      } else {
         console.warn(`[Download] \u2717 Download failed with exit code ${code}`);
-        const currentItem = this.items.get(item.id);
-        if (currentItem && currentItem.status !== "paused" && currentItem.status !== "canceled") {
-          const errorMessage = this.mapYtdlpError(stderrBuffer, code);
-          this.updateItemStatus(item.id, "failed", {
-            errorCode: errorMessage.code,
-            errorMessage: errorMessage.message,
-            speed: 0,
-            eta: "--"
-            // NOTE: Do NOT reset progress or downloadedSize - preserve for resume
-          });
-          this.emitStateChange(item.id, "failed", errorMessage.code, errorMessage.message);
-        }
+        const errorMessage = this.mapYtdlpError(stderrBuffer, code);
+        this.updateItemStatus(item.id, "failed", {
+          errorCode: errorMessage.code,
+          errorMessage: errorMessage.message,
+          speed: 0,
+          eta: "--"
+        });
+        this.emitStateChange(item.id, "failed", errorMessage.code, errorMessage.message);
+        return;
+      }
+      console.warn(`[Download] \u2717 Download failed with exit code ${code}`);
+      if (currentItem.status !== "paused" && currentItem.status !== "canceled") {
+        const errorMessage = this.mapYtdlpError(stderrBuffer, code);
+        this.updateItemStatus(item.id, "failed", {
+          errorCode: errorMessage.code,
+          errorMessage: errorMessage.message,
+          speed: 0,
+          eta: "--"
+        });
+        this.emitStateChange(item.id, "failed", errorMessage.code, errorMessage.message);
       }
     });
     proc.on("error", (err) => {
@@ -1010,7 +1037,9 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     try {
       const stat2 = await fs.stat(outputPath);
       const actualSize = stat2.size;
-      const shouldComplete = actualSize > 0 && (item.progress >= 95 || actualSize >= Math.max(item.fileSize * 0.9, item.downloadedSize));
+      const isNearComplete = actualSize >= item.fileSize * 0.9;
+      const isEqual = actualSize >= item.fileSize * 0.99;
+      const shouldComplete = actualSize > 0 && (item.progress >= 95 || isNearComplete || isEqual);
       if (shouldComplete) {
         console.log(`[Download] File is ${Math.round(actualSize / (item.fileSize || 1) * 100)}% complete, marking as completed instead of paused`);
         this.updateItemStatus(id, "completed", {
@@ -1139,7 +1168,9 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     try {
       const stat2 = await fs.stat(outputPath);
       const actualSize = stat2.size;
-      const shouldComplete = actualSize > 0 && (item.progress >= 95 || actualSize >= Math.max(item.fileSize * 0.9, item.downloadedSize));
+      const isNearComplete = actualSize >= item.fileSize * 0.9;
+      const isEqual = actualSize >= item.fileSize * 0.99;
+      const shouldComplete = actualSize > 0 && (item.progress >= 95 || isNearComplete || isEqual);
       if (shouldComplete) {
         console.log(`[Download] File is ${Math.round(actualSize / (item.fileSize || 1) * 100)}% complete, marking as completed instead of canceled`);
         this.updateItemStatus(id, "completed", {

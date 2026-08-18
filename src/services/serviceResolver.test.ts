@@ -26,6 +26,7 @@ import {
   _injectSchedulerService,
   _injectSettingsService
 } from "../services/serviceResolver";
+import type { VideoMetadata } from "../types/download";
 import { MockMetadataService } from "../services/metadataService";
 import { MockDownloadService } from "../services/downloadService";
 import { MockHistoryService } from "../services/historyService";
@@ -183,7 +184,7 @@ describe("serviceResolver", () => {
     it("moves a started download out of analyzing immediately in the UI", async () => {
       installFakeElectronAPI();
       const service = new ElectronDownloadService();
-      const metadata = {
+      const metadata: VideoMetadata = {
         id: "video-queued",
         sourceUrl: "https://www.youtube.com/watch?v=test123",
         linkType: "video",
@@ -204,7 +205,7 @@ describe("serviceResolver", () => {
         container: "mp4",
         fileSize: 10 * 1024 * 1024,
         uploadDate: "2026-08-01"
-      } as const;
+      };
 
       const item = service.createFromMetadata(metadata, 1, "720p", "mp4");
       const next = service.transition(item, "analyzing", Date.now());
@@ -217,7 +218,7 @@ describe("serviceResolver", () => {
     it("does not issue duplicate start requests when queued items are reprocessed before state refresh", async () => {
       installFakeElectronAPI();
       const service = new ElectronDownloadService();
-      const metadata = {
+      const metadata: VideoMetadata = {
         id: "video-repeat-start",
         sourceUrl: "https://www.youtube.com/watch?v=test456",
         linkType: "video",
@@ -238,7 +239,7 @@ describe("serviceResolver", () => {
         container: "mp4",
         fileSize: 8 * 1024 * 1024,
         uploadDate: "2026-08-01"
-      } as const;
+      };
 
       const item = service.createFromMetadata(metadata, 1, "720p", "mp4");
 
