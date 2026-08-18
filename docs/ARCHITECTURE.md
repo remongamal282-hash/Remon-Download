@@ -283,6 +283,150 @@ Mock services are never deleted and remain fully functional for Web mode and Vit
 - Seed Demo Data and Simulate Download add queued mock `DownloadItem` records without auto-starting downloads.
 - Clear Mock Data uses store actions for Queue, Metadata, History, Favorites, and Scheduler session/mock data. It does not clear persisted Settings.
 
+## System Tray Integration (Phase 3.2)
+
+The System Tray provides Windows desktop integration for background operation of downloads and scheduled tasks without requiring the main window to be open.
+
+### Tray Module (`electron/tray.ts`)
+
+Single-responsibility module for tray lifecycle management:
+
+```ts
+export function createTray(mainWindow: BrowserWindow): Tray
+export function showWindow(mainWindow: BrowserWindow | null): void
+export function hideWindow(mainWindow: BrowserWindow | null): void
+export function minimizeToTray(mainWindow: BrowserWindow | null): void
+export function quitApplication(): void
+export function destroyTray(): void
+export function hasTray(): boolean
+export function getTray(): Tray | null
+```
+
+### Context Menu
+
+Created with `Menu.buildFromTemplate()` in `createTray()`:
+
+| Option | Action | Method |
+|---|---|---|
+| Show Remon Download | `showWindow()` + `focus()` | Restores window to foreground |
+| Hide Remon Download | `hideWindow()` | Hides window, keeps app running |
+| _(Separator)_ | — | Visual divider |
+| Quit Remon Download | `quitApplication()` | Calls `app.quit()` for graceful shutdown |
+
+### Click Behavior
+
+- **Left click** (single): Calls `showWindow(mainWindow)` to restore and focus.
+- **Right click**: Opens context menu (automatic via Electron).
+
+### Window Lifecycle
+
+**Design Goal**: Separate window close from application quit.
+
+| Event | Old Behavior | New Behavior (Tray) |
+|---|---|---|
+| X button pressed | Closes window, exits app | Prevents close, hides to tray |
+| Minimize button | Minimizes to taskbar | Hides to tray |
+| window-all-closed (Windows) | Exits app | Prevented (app continues) |
+| Tray "Hide" | N/A | `hideWindow()` |
+| Tray "Show" | N/A | `showWindow()` + `focus()` |
+| Tray "Quit" | N/A | `app.quit()` → graceful shutdown |
+| before-quit | N/A | `destroyTray()` before exit |
+| app.activate | Createwindow if none exists | Restore hidden window if exists |
+
+### Main Process Implementation (`electron/main.ts`)
+
+**Initialization**:
+```ts
+app.whenReady().then(() => {
+  createWindow();
+  if (mainWindow) {
+    createTray(mainWindow);  // Create tray after window
+  }
+  // ...
+});
+```
+
+**Window close prevention**:
+```ts
+mainWindow.on("close", (event) => {
+  if (mainWindow) {
+    event.preventDefault();
+    hideWindow(mainWindow);
+  }
+});
+```
+
+**Minimize to tray**:
+```ts
+mainWindow.on("minimize", () => {
+  if (mainWindow) {
+    minimizeToTray(mainWindow);
+  }
+});
+```
+
+**Window-all-closed prevention**:
+```ts
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    // Intentionally prevent app.quit() — tray remains active
+    console.log("[Main] All windows closed, but app continues running (tray still active)");
+  }
+});
+```
+
+**Cleanup on quit**:
+```ts
+app.on("before-quit", () => {
+  destroyTray();  // Destroy tray before process exit
+});
+```
+
+### IPC Integration
+
+**No new IPC channels added.** Existing channels reused:
+
+- `WINDOW_CLOSE` handler: Now calls `hideWindow()` instead of `window.close()`
+- `WINDOW_MINIMIZE` handler: Calls `minimize()` (minimize event does tray action)
+
+This maintains backward compatibility with existing Renderer code (AppLayout.tsx, etc.).
+
+### Service Continuity While Hidden
+
+All services continue running when the main window is hidden:
+
+| Service | Behavior When Hidden |
+|---|---|
+| **NativeDownloadService** | Continues yt-dlp subprocess execution, progress parsing, pause/resume |
+| **IPC Handlers** | Remain registered via `ipcMain.handle()` |
+| **NativeSchedulerService** | Continues ticking, checks trigger conditions |
+| **File I/O** | Settings, History, Favorites persist normally |
+
+Download progress events (`download:progress`, `download:state-change`) continue to be emitted and received by any Renderer windows that may open later.
+
+### Single Instance Guarantee
+
+`createTray()` checks `hasTray()` before creating:
+```ts
+export function createTray(mainWindow: BrowserWindow): Tray {
+  if (tray) {
+    console.warn("[Tray] Tray already exists, returning existing instance");
+    return tray;
+  }
+  // ... create tray
+}
+```
+
+This prevents accidental duplicate Tray instances even if the function is called multiple times.
+
+### Known Behaviors and Design Decisions
+
+1. **X button hides to tray, not close**: Intentional to prevent accidental app exit while downloads or scheduled tasks are active.
+2. **Tray is mandatory**: Phase 3.2 does not include settings to disable tray behavior.
+3. **Minimize goes to tray, not taskbar**: Consistent with "always in background" design.
+4. **window-all-closed is prevented on Windows**: Allows app to remain active via tray while all windows are closed.
+5. **Only "Quit" exits the app completely**: This is the explicit user action to terminate the process.
+
 ## Known Architectural Decision Pending
 
 **SettingsService sync/async mismatch**: The `SettingsService` interface is synchronous (`get(): AppSettings`) to support `LocalStorageSettingsService`. The Electron IPC layer is inherently async. The `ElectronSettingsService` adapter documents this and throws on sync calls. Resolution options:

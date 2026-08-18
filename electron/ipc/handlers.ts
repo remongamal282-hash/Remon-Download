@@ -6,6 +6,7 @@ import { NativeSettingsService } from "../services/nativeSettingsService";
 import { NativeHistoryService } from "../services/nativeHistoryService";
 import { NativeFavoritesService } from "../services/nativeFavoritesService";
 import { NativeSchedulerService } from "../services/nativeSchedulerService";
+import { hideWindow } from "../tray";
 import type { ErrorModel } from "../../src/types/errors";
 
 function wrapSuccess<T>(data: T): IpcResult<T> {
@@ -255,7 +256,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.WINDOW_CLOSE, async () => {
     const focusedWindow = BrowserWindow.getFocusedWindow();
     if (focusedWindow) {
-      focusedWindow.close();
+      hideWindow(focusedWindow);
     }
     return wrapSuccess(undefined);
   });

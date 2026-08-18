@@ -22,11 +22,11 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // electron/main.ts
-var import_electron3 = require("electron");
-var path2 = __toESM(require("path"), 1);
+var import_electron4 = require("electron");
+var path3 = __toESM(require("path"), 1);
 
 // electron/ipc/handlers.ts
-var import_electron2 = require("electron");
+var import_electron3 = require("electron");
 
 // electron/ipc/channels.ts
 var IPC_CHANNELS = {
@@ -109,8 +109,8 @@ var DefaultProcessExecutor = class {
   spawn(command, args, options) {
     return (0, import_child_process.spawn)(command, args, options);
   }
-  async checkAccess(path3, mode) {
-    return (0, import_promises.access)(path3, mode);
+  async checkAccess(path4, mode) {
+    return (0, import_promises.access)(path4, mode);
   }
 };
 function isYouTubeUrl(url) {
@@ -256,11 +256,11 @@ var NativeMetadataService = class {
     const candidates = ["yt-dlp", "yt-dlp.exe", "youtube-dl", "youtube-dl.exe"];
     for (const candidate of candidates) {
       try {
-        await new Promise((resolve2, reject) => {
+        await new Promise((resolve3, reject) => {
           const proc = this.executor.spawn(candidate, ["--version"], { timeout: 5e3 });
           proc.on("error", reject);
           proc.on("exit", (code) => {
-            if (code === 0) resolve2();
+            if (code === 0) resolve3();
             else reject(new Error(`Exit code ${code}`));
           });
         });
@@ -275,7 +275,7 @@ var NativeMetadataService = class {
    * Optimized for speed with faster options.
    */
   async executeYtdlp(ytdlpPath, url, isPlaylist = false) {
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve3, reject) => {
       const args = [
         "--dump-single-json",
         isPlaylist ? "--yes-playlist" : "--no-playlist",
@@ -311,7 +311,7 @@ var NativeMetadataService = class {
         if (code === 0) {
           try {
             const parsed = JSON.parse(stdout);
-            resolve2(parsed);
+            resolve3(parsed);
           } catch {
             reject(new Error("ytdlp_invalid_json"));
           }
@@ -389,8 +389,8 @@ var DefaultProcessExecutor2 = class {
     const { spawn: spawn2 } = require("child_process");
     return spawn2(command, args, options);
   }
-  checkAccess(path3, mode) {
-    return fs.access(path3, mode);
+  checkAccess(path4, mode) {
+    return fs.access(path4, mode);
   }
 };
 var NativeDownloadService = class extends import_events.EventEmitter {
@@ -429,11 +429,11 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     const candidates = ["yt-dlp", "yt-dlp.exe", "youtube-dl", "youtube-dl.exe"];
     for (const candidate of candidates) {
       try {
-        await new Promise((resolve2, reject) => {
+        await new Promise((resolve3, reject) => {
           const proc = this.executor.spawn(candidate, ["--version"], { timeout: 5e3 });
           proc.on("error", reject);
           proc.on("exit", (code) => {
-            if (code === 0) resolve2();
+            if (code === 0) resolve3();
             else reject(new Error(`Exit code ${code}`));
           });
         });
@@ -1308,9 +1308,9 @@ var import_fs2 = require("fs");
 var import_path = require("path");
 var import_electron = require("electron");
 var realFs = {
-  mkdir: (path3, options) => import_fs2.promises.mkdir(path3, options).then(() => void 0),
-  readFile: (path3, encoding) => import_fs2.promises.readFile(path3, encoding),
-  writeFile: (path3, data, encoding) => import_fs2.promises.writeFile(path3, data, encoding)
+  mkdir: (path4, options) => import_fs2.promises.mkdir(path4, options).then(() => void 0),
+  readFile: (path4, encoding) => import_fs2.promises.readFile(path4, encoding),
+  writeFile: (path4, data, encoding) => import_fs2.promises.writeFile(path4, data, encoding)
 };
 var realApp = {
   getUserDataPath: () => import_electron.app.getPath("userData")
@@ -1864,6 +1864,92 @@ var NativeSchedulerService = class {
   }
 };
 
+// electron/tray.ts
+var import_electron2 = require("electron");
+var path2 = __toESM(require("path"), 1);
+var tray = null;
+var getIconPath = () => {
+  const iconPath = path2.resolve(__dirname, "../../icon.png");
+  return iconPath;
+};
+function createTray(mainWindow2) {
+  if (tray) {
+    console.warn("[Tray] Tray already exists, returning existing instance");
+    return tray;
+  }
+  try {
+    const iconPath = getIconPath();
+    tray = new import_electron2.Tray(iconPath);
+    tray.setToolTip("Remon Download");
+    const contextMenu = import_electron2.Menu.buildFromTemplate([
+      {
+        label: "Show Remon Download",
+        click: () => {
+          showWindow(mainWindow2);
+        }
+      },
+      {
+        label: "Hide Remon Download",
+        click: () => {
+          hideWindow(mainWindow2);
+        }
+      },
+      {
+        type: "separator"
+      },
+      {
+        label: "Quit Remon Download",
+        click: () => {
+          quitApplication();
+        }
+      }
+    ]);
+    tray.setContextMenu(contextMenu);
+    tray.on("click", () => {
+      showWindow(mainWindow2);
+    });
+    console.log("[Tray] System Tray created successfully");
+    return tray;
+  } catch (error) {
+    console.error("[Tray] Failed to create tray:", error);
+    throw error;
+  }
+}
+function showWindow(mainWindow2) {
+  if (!mainWindow2) {
+    console.warn("[Tray] mainWindow is null, cannot show");
+    return;
+  }
+  if (mainWindow2.isMinimized()) {
+    mainWindow2.restore();
+  }
+  mainWindow2.show();
+  mainWindow2.focus();
+  console.log("[Tray] Window shown and focused");
+}
+function hideWindow(mainWindow2) {
+  if (!mainWindow2) {
+    console.warn("[Tray] mainWindow is null, cannot hide");
+    return;
+  }
+  mainWindow2.hide();
+  console.log("[Tray] Window hidden");
+}
+function minimizeToTray(mainWindow2) {
+  hideWindow(mainWindow2);
+}
+function quitApplication() {
+  console.log("[Tray] Quitting application...");
+  import_electron2.app.quit();
+}
+function destroyTray() {
+  if (tray) {
+    tray.destroy();
+    tray = null;
+    console.log("[Tray] Tray destroyed");
+  }
+}
+
 // electron/ipc/handlers.ts
 function wrapSuccess(data) {
   return { success: true, data };
@@ -1917,13 +2003,13 @@ function registerIpcHandlers() {
       downloadService = new NativeDownloadService(settings);
       downloadServiceReady = true;
       downloadService.on("download:progress", (payload) => {
-        const windows = import_electron2.BrowserWindow.getAllWindows();
+        const windows = import_electron3.BrowserWindow.getAllWindows();
         windows.forEach((win) => {
           win.webContents.send(IPC_EVENTS.DOWNLOAD_PROGRESS, payload);
         });
       });
       downloadService.on("download:state-change", (payload) => {
-        const windows = import_electron2.BrowserWindow.getAllWindows();
+        const windows = import_electron3.BrowserWindow.getAllWindows();
         windows.forEach((win) => {
           win.webContents.send(IPC_EVENTS.DOWNLOAD_STATE_CHANGE, payload);
         });
@@ -1942,7 +2028,7 @@ function registerIpcHandlers() {
     }
     return downloadService;
   };
-  import_electron2.ipcMain.handle(IPC_CHANNELS.METADATA_ANALYZE, async (_, { url }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.METADATA_ANALYZE, async (_, { url }) => {
     try {
       const settings = await settingsService.get();
       const metadataService = new NativeMetadataService(settings.ytdlpPath);
@@ -1952,7 +2038,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_GET_ALL, async () => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_GET_ALL, async () => {
     try {
       const service = await ensureDownloadService();
       const data = await service.getAll();
@@ -1961,7 +2047,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_ADD, async (_, { item }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_ADD, async (_, { item }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.add(item);
@@ -1970,7 +2056,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_START, async (_, { id }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_START, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.start(id);
@@ -1979,7 +2065,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_PAUSE, async (_, { id }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_PAUSE, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.pause(id);
@@ -1988,7 +2074,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_RESUME, async (_, { id }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_RESUME, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.resume(id);
@@ -1997,7 +2083,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_CANCEL, async (_, { id }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_CANCEL, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.cancel(id);
@@ -2006,7 +2092,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_RETRY, async (_, { id }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_RETRY, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.retry(id);
@@ -2015,7 +2101,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_REMOVE, async (_, { id }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_REMOVE, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.remove(id);
@@ -2024,7 +2110,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_REORDER, async (_, { orderedIds }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_REORDER, async (_, { orderedIds }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.reorder(orderedIds);
@@ -2033,7 +2119,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.SETTINGS_GET, async () => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.SETTINGS_GET, async () => {
     try {
       const data = await settingsService.get();
       return wrapSuccess(data);
@@ -2041,7 +2127,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.SETTINGS_UPDATE, async (_, { settings }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.SETTINGS_UPDATE, async (_, { settings }) => {
     try {
       const data = await settingsService.update(settings);
       if (downloadService) {
@@ -2052,7 +2138,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.SETTINGS_RESET, async () => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.SETTINGS_RESET, async () => {
     try {
       const data = await settingsService.reset();
       if (downloadService) {
@@ -2063,24 +2149,24 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, async () => {
-    const focusedWindow = import_electron2.BrowserWindow.getFocusedWindow();
+  import_electron3.ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, async () => {
+    const focusedWindow = import_electron3.BrowserWindow.getFocusedWindow();
     if (focusedWindow) {
       focusedWindow.minimize();
     }
     return wrapSuccess(void 0);
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.WINDOW_CLOSE, async () => {
-    const focusedWindow = import_electron2.BrowserWindow.getFocusedWindow();
+  import_electron3.ipcMain.handle(IPC_CHANNELS.WINDOW_CLOSE, async () => {
+    const focusedWindow = import_electron3.BrowserWindow.getFocusedWindow();
     if (focusedWindow) {
-      focusedWindow.close();
+      hideWindow(focusedWindow);
     }
     return wrapSuccess(void 0);
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.SETTINGS_SELECT_DOWNLOAD_FOLDER, async () => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.SETTINGS_SELECT_DOWNLOAD_FOLDER, async () => {
     try {
-      const focusedWindow = import_electron2.BrowserWindow.getFocusedWindow();
-      const result = await import_electron2.dialog.showOpenDialog(focusedWindow || new import_electron2.BrowserWindow(), {
+      const focusedWindow = import_electron3.BrowserWindow.getFocusedWindow();
+      const result = await import_electron3.dialog.showOpenDialog(focusedWindow || new import_electron3.BrowserWindow(), {
         properties: ["openDirectory"]
       });
       if (result.canceled || result.filePaths.length === 0) {
@@ -2098,29 +2184,29 @@ function registerIpcHandlers() {
   });
   function resolveDownloadFolderPath(folderPath) {
     if (!folderPath || folderPath.trim() === "") {
-      return import_electron2.app.getPath("downloads");
+      return import_electron3.app.getPath("downloads");
     }
     if (folderPath === "~") {
-      return import_electron2.app.getPath("home");
+      return import_electron3.app.getPath("home");
     }
     if (folderPath.startsWith("~/")) {
-      return `${import_electron2.app.getPath("home")}${folderPath.slice(1)}`;
+      return `${import_electron3.app.getPath("home")}${folderPath.slice(1)}`;
     }
     if (folderPath.startsWith("~\\")) {
-      return `${import_electron2.app.getPath("home")}${folderPath.slice(1)}`;
+      return `${import_electron3.app.getPath("home")}${folderPath.slice(1)}`;
     }
     return folderPath;
   }
-  import_electron2.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_OPEN_FOLDER, async (_, { path: path3 }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_OPEN_FOLDER, async (_, { path: path4 }) => {
     try {
-      const folderPath = resolveDownloadFolderPath(path3 ?? "");
-      await import_electron2.shell.openPath(folderPath);
+      const folderPath = resolveDownloadFolderPath(path4 ?? "");
+      await import_electron3.shell.openPath(folderPath);
       return wrapSuccess(void 0);
     } catch (err) {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.HISTORY_GET_ALL, async () => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.HISTORY_GET_ALL, async () => {
     try {
       const data = await historyService.getAll();
       return wrapSuccess(data);
@@ -2128,7 +2214,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.HISTORY_ADD, async (_, { item }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.HISTORY_ADD, async (_, { item }) => {
     try {
       const data = await historyService.add(item);
       return wrapSuccess(data);
@@ -2136,7 +2222,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.HISTORY_REMOVE, async (_, { id }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.HISTORY_REMOVE, async (_, { id }) => {
     try {
       const data = await historyService.remove(id);
       return wrapSuccess(data);
@@ -2144,7 +2230,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.HISTORY_CLEAR, async () => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.HISTORY_CLEAR, async () => {
     try {
       await historyService.clear();
       return wrapSuccess(void 0);
@@ -2152,7 +2238,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.FAVORITES_GET_ALL, async () => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.FAVORITES_GET_ALL, async () => {
     try {
       const data = await favoritesService.getAll();
       return wrapSuccess(data);
@@ -2160,7 +2246,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.FAVORITES_ADD, async (_, { item }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.FAVORITES_ADD, async (_, { item }) => {
     try {
       const data = await favoritesService.add(item);
       return wrapSuccess(data);
@@ -2168,7 +2254,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.FAVORITES_REMOVE, async (_, { id }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.FAVORITES_REMOVE, async (_, { id }) => {
     try {
       const data = await favoritesService.remove(id);
       return wrapSuccess(data);
@@ -2176,7 +2262,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.SCHEDULER_GET_ALL, async () => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.SCHEDULER_GET_ALL, async () => {
     try {
       const data = await schedulerService.getAll();
       return wrapSuccess(data);
@@ -2184,7 +2270,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.SCHEDULER_CREATE, async (_, { schedule }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.SCHEDULER_CREATE, async (_, { schedule }) => {
     try {
       const data = await schedulerService.create(schedule);
       return wrapSuccess(data);
@@ -2192,7 +2278,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.SCHEDULER_UPDATE, async (_, { schedule }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.SCHEDULER_UPDATE, async (_, { schedule }) => {
     try {
       const data = await schedulerService.update(schedule);
       return wrapSuccess(data);
@@ -2200,7 +2286,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.SCHEDULER_CANCEL, async (_, { id }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.SCHEDULER_CANCEL, async (_, { id }) => {
     try {
       const data = await schedulerService.cancel(id);
       return wrapSuccess(data);
@@ -2208,7 +2294,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.SCHEDULER_REMOVE, async (_, { id }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.SCHEDULER_REMOVE, async (_, { id }) => {
     try {
       const data = await schedulerService.remove(id);
       return wrapSuccess(data);
@@ -2216,7 +2302,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron2.ipcMain.handle(IPC_CHANNELS.SCHEDULER_TICK, async (_, { now }) => {
+  import_electron3.ipcMain.handle(IPC_CHANNELS.SCHEDULER_TICK, async (_, { now }) => {
     try {
       const data = await schedulerService.tick(now);
       return wrapSuccess(data);
@@ -2228,9 +2314,9 @@ function registerIpcHandlers() {
 
 // electron/main.ts
 var mainWindow = null;
-var appIconPath = path2.resolve(__dirname, "../../icon.png");
+var appIconPath = path3.resolve(__dirname, "../../icon.png");
 function createWindow() {
-  mainWindow = new import_electron3.BrowserWindow({
+  mainWindow = new import_electron4.BrowserWindow({
     width: 1200,
     height: 600,
     minWidth: 900,
@@ -2240,7 +2326,7 @@ function createWindow() {
     autoHideMenuBar: true,
     titleBarStyle: "default",
     webPreferences: {
-      preload: path2.join(__dirname, "preload.cjs"),
+      preload: path3.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -2266,7 +2352,7 @@ function createWindow() {
     if (template.length === 0) {
       return;
     }
-    const menu = import_electron3.Menu.buildFromTemplate(template);
+    const menu = import_electron4.Menu.buildFromTemplate(template);
     menu.popup({ window: mainWindow });
   });
   registerIpcHandlers();
@@ -2274,24 +2360,48 @@ function createWindow() {
   if (devServerUrl) {
     void mainWindow.loadURL(devServerUrl);
   } else {
-    void mainWindow.loadFile(path2.join(__dirname, "../dist/index.html"));
+    void mainWindow.loadFile(path3.join(__dirname, "../dist/index.html"));
   }
+  mainWindow.on("minimize", () => {
+    if (mainWindow) {
+      minimizeToTray(mainWindow);
+    }
+  });
+  mainWindow.on("close", (event) => {
+    if (mainWindow) {
+      event.preventDefault();
+      hideWindow(mainWindow);
+      console.log("[Main] Window close intercepted, hiding to tray");
+    }
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
 }
-import_electron3.app.whenReady().then(() => {
-  import_electron3.app.setAppUserModelId("com.remon.download");
+import_electron4.app.whenReady().then(() => {
+  import_electron4.app.setAppUserModelId("com.remon.download");
   createWindow();
-  import_electron3.app.on("activate", () => {
-    if (import_electron3.BrowserWindow.getAllWindows().length === 0) {
+  if (mainWindow) {
+    createTray(mainWindow);
+  }
+  import_electron4.app.on("activate", () => {
+    if (mainWindow === null) {
       createWindow();
+      if (mainWindow) {
+        createTray(mainWindow);
+      }
+    } else {
+      showWindow(mainWindow);
     }
   });
 });
-import_electron3.app.on("window-all-closed", () => {
+import_electron4.app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
-    import_electron3.app.quit();
+    console.log("[Main] All windows closed, but app continues running (tray still active)");
   }
+});
+import_electron4.app.on("before-quit", () => {
+  console.log("[Main] App is quitting, destroying tray...");
+  destroyTray();
 });
 //# sourceMappingURL=main.cjs.map

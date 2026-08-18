@@ -1,5 +1,91 @@
 # Changelog
 
+## 1.2.0-system-tray (Phase 3.2 Automated Complete | Manual In Progress)
+
+Added:
+- **System Tray Integration**: Windows system tray with context menu and window management.
+- **electron/tray.ts** (143 lines):
+  - `createTray(mainWindow)`: Creates single Tray instance with icon and context menu (Show/Hide/Quit).
+  - `showWindow(mainWindow)`: Shows and focuses window, restores if minimized.
+  - `hideWindow(mainWindow)`: Hides window without closing application.
+  - `minimizeToTray(mainWindow)`: Minimizes window to tray.
+  - `quitApplication()`: Quits application via app.quit().
+  - `destroyTray()`: Cleans up tray resources.
+  - `hasTray()`, `getTray()`: Tray state queries.
+  - Single instance guarantee: `createTray()` checks `hasTray()` before creating.
+  - Icon path resolution: Uses app icon from root directory.
+- **Tray Context Menu**:
+  - "Show Remon Download" → Shows and focuses window.
+  - "Hide Remon Download" → Hides window without closing app.
+  - Separator.
+  - "Quit Remon Download" → Quits application completely.
+- **Tray Click Behavior**:
+  - Left click: Show + Focus window.
+  - Right click: Context menu.
+- **Window Lifecycle Changes**:
+  - X button (close event): Prevented → Hides window to tray instead of closing.
+  - Minimize button: Triggers minimizeToTray() → Hides window.
+  - window-all-closed event: Prevented on Windows (app continues running with tray active).
+  - before-quit event: Destroys tray before process exits.
+  - app.activate: Restores hidden window if mainWindow exists.
+- **IPC Handler Updates**:
+  - `WINDOW_CLOSE`: Now calls `hideWindow()` instead of `window.close()`.
+  - `WINDOW_MINIMIZE`: Handler calls `minimize()`, minimize event listener does tray action.
+  - No IPC contract changes (backwards compatible).
+- **Test Files Created**:
+  - `electron/tray.test.ts`: 23 unit tests for tray module (create, show, hide, quit, destroy, callbacks).
+  - `electron/main.test.ts`: 12 lifecycle tests for window behavior and app lifecycle.
+  - Mocking strategy: Electron GUI APIs mocked in Vitest (acknowledged limitation per spec).
+- **Manual Test Checklist**:
+  - `MANUAL_E2E_TEST_CHECKLIST.md`: 12 comprehensive manual tests covering:
+    1. Tray icon appears on app launch.
+    2. Right-click shows context menu.
+    3. Hide operation → window disappears, process continues.
+    4. Show operation → window returns and focuses.
+    5. Download continues while window is hidden.
+    6. Reopen from tray shows correct queue state.
+    7. Scheduler starts downloads while app is hidden.
+    8. Quit from tray → app exits completely.
+    9. Left-click on tray icon shows + focuses window.
+    10. Minimize button hides to tray.
+    11. Multiple hide/show cycles work correctly.
+    12. Close behavior is consistent.
+
+Changed:
+- **electron/main.ts**:
+  - Added `import { createTray, destroyTray, showWindow, hideWindow, minimizeToTray } from "./tray"`.
+  - Tray created after `createWindow()` in `app.whenReady()`.
+  - Window close event handler prevents default and calls `hideWindow()`.
+  - Window minimize event handler calls `minimizeToTray()`.
+  - `window-all-closed` handler prevents default on Windows.
+  - Added `before-quit` handler to destroy tray.
+  - Updated `app.activate` to restore hidden window.
+- **electron/ipc/handlers.ts**:
+  - Added `import { hideWindow } from "../tray"`.
+  - `WINDOW_CLOSE` handler now calls `hideWindow()` instead of `window.close()`.
+- **electron/ipc/ipc.test.ts**:
+  - Updated channel count assertion from 27 to 30 (pre-existing channels).
+
+Fixed:
+- TypeScript type safety: Window functions now accept `BrowserWindow | null` for defensive null checks.
+- Minimize event handler null check: Verifies mainWindow exists before calling tray function.
+- IPC channel count test: Updated to reflect actual channel count (30, not 27).
+
+Tested:
+- **TypeScript**: `npx tsc -p tsconfig.electron.json --noEmit` passes ✅
+- **Build**: `npm run build` succeeds ✅
+- **Electron Build**: `npm run electron:build` succeeds (79.5 KB main.cjs) ✅
+- **Unit Tests**: Tray and lifecycle tests created (mock limitations acknowledged).
+
+Known Behaviors:
+- Tray is mandatory in Phase 3.2; no setting to disable it.
+- X button hides to tray, not close — this is intentional to prevent accidental app exit.
+- window-all-closed is prevented on Windows to keep tray active.
+- Minimize goes to tray (not traditional minimize to taskbar).
+- Only "Quit" from tray menu exits the app completely.
+- IPC services (Download, Scheduler, Metadata, etc.) remain active while window is hidden.
+- No process termination on window close; app continues running.
+
 ## 1.1.5-native-download (Phase 2.x Complete)
 
 Added:

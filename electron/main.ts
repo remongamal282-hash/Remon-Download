@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Menu } from "electron";
 import * as path from "path";
 import { registerIpcHandlers } from "./ipc/handlers";
+import { createTray, destroyTray, showWindow, hideWindow, minimizeToTray } from "./tray";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -67,6 +68,23 @@ function createWindow(): void {
     void mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
   }
 
+  // Handle minimize: minimize to tray
+  mainWindow.on("minimize", () => {
+    if (mainWindow) {
+      minimizeToTray(mainWindow);
+    }
+  });
+
+  // Handle close: hide to tray instead of closing
+  // This prevents the entire application from closing when user clicks X
+  mainWindow.on("close", (event) => {
+    if (mainWindow) {
+      event.preventDefault();
+      hideWindow(mainWindow);
+      console.log("[Main] Window close intercepted, hiding to tray");
+    }
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -76,15 +94,36 @@ app.whenReady().then(() => {
   app.setAppUserModelId("com.remon.download");
   createWindow();
 
+  // Create system tray after window is created
+  if (mainWindow) {
+    createTray(mainWindow);
+  }
+
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    if (mainWindow === null) {
       createWindow();
+      if (mainWindow) {
+        createTray(mainWindow);
+      }
+    } else {
+      // If mainWindow exists but is hidden, show it
+      showWindow(mainWindow);
     }
   });
 });
 
+// Handle the event when user tries to close all windows
 app.on("window-all-closed", () => {
+  // On Windows, don't quit the app when all windows are closed
+  // because the tray is still active and the app is still working
+  // Only quit when user explicitly selects Quit from the tray menu
   if (process.platform !== "darwin") {
-    app.quit();
+    console.log("[Main] All windows closed, but app continues running (tray still active)");
   }
+});
+
+// Clean up tray before quitting
+app.on("before-quit", () => {
+  console.log("[Main] App is quitting, destroying tray...");
+  destroyTray();
 });

@@ -67,8 +67,8 @@ describe("IPC_CHANNELS — naming conventions", () => {
     expect(namespaces).toContain("scheduler");
   });
 
-  it("has exactly 27 channels defined", () => {
-    expect(Object.keys(IPC_CHANNELS).length).toBe(27);
+  it("has exactly 30 channels defined", () => {
+    expect(Object.keys(IPC_CHANNELS).length).toBe(30);
   });
 });
 
