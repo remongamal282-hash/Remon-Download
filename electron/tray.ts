@@ -8,14 +8,16 @@
  * - Single Tray instance lifecycle
  */
 
-import { Tray, Menu, BrowserWindow, app } from "electron";
+import { Tray, Menu, BrowserWindow, app, nativeImage } from "electron";
 import * as path from "path";
 
 let tray: Tray | null = null;
 
 const getIconPath = (): string => {
-  const iconPath = path.resolve(__dirname, "../../icon.png");
-  return iconPath;
+  const applicationPath = typeof app.getAppPath === "function"
+    ? app.getAppPath()
+    : path.resolve(__dirname, "../..");
+  return path.join(applicationPath, "icon.png");
 };
 
 /**
@@ -30,7 +32,11 @@ export function createTray(mainWindow: BrowserWindow): Tray {
 
   try {
     const iconPath = getIconPath();
-    tray = new Tray(iconPath);
+    const icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+    if (icon.isEmpty()) {
+      throw new Error(`Tray icon could not be loaded: ${iconPath}`);
+    }
+    tray = new Tray(icon);
 
     // Set the tooltip
     tray.setToolTip("Remon Download");

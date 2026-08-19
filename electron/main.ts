@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Menu } from "electron";
 import * as path from "path";
 import { registerIpcHandlers } from "./ipc/handlers";
-import { createTray, destroyTray, showWindow, hideWindow, minimizeToTray } from "./tray";
+import { createTray, destroyTray, showWindow, hideWindow } from "./tray";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -67,13 +67,6 @@ function createWindow(): void {
   } else {
     void mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
   }
-
-  // Handle minimize: minimize to tray
-  mainWindow.on("minimize", () => {
-    if (mainWindow) {
-      minimizeToTray(mainWindow);
-    }
-  });
 
   // Handle close: hide to tray instead of closing
   // This prevents the entire application from closing when user clicks X

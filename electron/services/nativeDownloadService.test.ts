@@ -926,24 +926,34 @@ describe("NativeDownloadService", () => {
     });
 
     it("should include --continue flag when resuming", async () => {
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "remon-resume-"));
       let capturedArgs: string[] = [];
-      const originalSpawn = mockExecutor.spawn.bind(mockExecutor);
-      mockExecutor.spawn = (cmd: string, args: string[], opts?: any) => {
-        capturedArgs = args;
-        return originalSpawn(cmd, args, opts);
-      };
+      try {
+        settings.downloadFolder = tempDir;
+        service = new NativeDownloadService(settings, mockExecutor);
+        const partialPath = path.join(tempDir, "Test Video.mp4.part");
+        writeFileSync(partialPath, Buffer.alloc(1024));
 
-      mockExecutor.setSpawnBehavior("yt-dlp", {
-        stdout: "",
-        stderr: "",
-        exitCode: 0
-      });
+        const originalSpawn = mockExecutor.spawn.bind(mockExecutor);
+        mockExecutor.spawn = (cmd: string, args: string[], opts?: any) => {
+          capturedArgs = args;
+          return originalSpawn(cmd, args, opts);
+        };
 
-      const item = createMockDownloadItem({ status: "paused" });
-      await service.add(item);
-      await service.resume(item.id);
+        mockExecutor.setSpawnBehavior("yt-dlp", {
+          stdout: "",
+          stderr: "",
+          exitCode: 0
+        });
 
-      expect(capturedArgs).toContain("--continue");
+        const item = createMockDownloadItem({ status: "paused" });
+        await service.add(item);
+        await service.resume(item.id);
+
+        expect(capturedArgs).toContain("--continue");
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
     });
 
     it("should include --no-continue flag when starting fresh", async () => {

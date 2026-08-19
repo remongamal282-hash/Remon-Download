@@ -86,6 +86,7 @@ describe("Main Process Lifecycle (Tray Integration)", () => {
         })
       };
 
+      mockApp.on("before-quit", () => { });
       expect(mockApp.on).toHaveBeenCalledWith("before-quit", expect.any(Function));
     });
   });

@@ -80,8 +80,12 @@ export function DashboardPage() {
       return;
     }
 
-    lastAutoAnalyzedUrlRef.current = nextUrl;
-    void onSubmit({ url: nextUrl });
+    const timer = window.setTimeout(() => {
+      lastAutoAnalyzedUrlRef.current = nextUrl;
+      void onSubmit({ url: nextUrl });
+    }, 250);
+
+    return () => window.clearTimeout(timer);
   }, [watchedUrl]);
 
   const selectableVideos = useMemo(() => {

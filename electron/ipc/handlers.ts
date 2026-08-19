@@ -3,9 +3,10 @@ import { IPC_CHANNELS, IPC_EVENTS, type IpcResult, type DownloadProgressPayload,
 import { NativeMetadataService } from "../services/nativeMetadataService";
 import { NativeDownloadService } from "../services/nativeDownloadService";
 import { NativeSettingsService } from "../services/nativeSettingsService";
+import { NativeSchedulerService } from "../services/nativeSchedulerService";
 import { NativeHistoryService } from "../services/nativeHistoryService";
 import { NativeFavoritesService } from "../services/nativeFavoritesService";
-import { NativeSchedulerService } from "../services/nativeSchedulerService";
+import { NativeNotificationService } from "../services/nativeNotificationService";
 import { hideWindow } from "../tray";
 import type { ErrorModel } from "../../src/types/errors";
 
@@ -28,6 +29,7 @@ export function registerIpcHandlers(): void {
   const historyService = new NativeHistoryService();
   const favoritesService = new NativeFavoritesService();
   const schedulerService = new NativeSchedulerService();
+  let notificationService: NativeNotificationService | null = null;
 
   // Initialize services with persistent storage
   const initServices = async () => {
@@ -66,11 +68,50 @@ export function registerIpcHandlers(): void {
   // Initialize NativeDownloadService with settings (async)
   let downloadService: NativeDownloadService | null = null;
   let downloadServiceReady = false;
+  const downloadItems = new Map<string, import("../../src/types/download").DownloadItem>();
+  let startQueuedDownloadsPromise: Promise<void> = Promise.resolve();
+
+  const startQueuedDownloads = async (): Promise<void> => {
+    const service = await ensureDownloadService();
+    const settings = await settingsService.get();
+    const items = await service.getAll();
+    const activeStatuses = ["downloading", "retrying", "merging", "converting"];
+    let availableSlots = Math.max(
+      0,
+      settings.concurrentDownloads - items.filter((item) => activeStatuses.includes(item.status)).length
+    );
+
+    for (const item of items.sort((left, right) => left.order - right.order)) {
+      if (availableSlots <= 0) {
+        break;
+      }
+
+      if (item.status !== "queued") {
+        continue;
+      }
+
+      try {
+        await service.start(item.id);
+        availableSlots -= 1;
+      } catch (error) {
+        console.error(`[IPC] Failed to auto-start queued download ${item.id}:`, error);
+      }
+    }
+  };
+
+  const queueAutoStart = (): void => {
+    startQueuedDownloadsPromise = startQueuedDownloadsPromise
+      .then(() => startQueuedDownloads())
+      .catch((error) => {
+        console.error("[IPC] Failed to start queued downloads:", error);
+      });
+  };
 
   const initDownloadService = async () => {
     try {
       const settings = await settingsService.get();
       downloadService = new NativeDownloadService(settings);
+      notificationService = notificationService ?? new NativeNotificationService(settings);
       downloadServiceReady = true;
 
       // Forward download progress events to Renderer
@@ -83,10 +124,33 @@ export function registerIpcHandlers(): void {
 
       // Forward download state change events to Renderer
       downloadService.on("download:state-change", (payload: DownloadStateChangePayload) => {
+        const cachedItem = downloadItems.get(payload.id);
+        if (cachedItem) {
+          downloadItems.set(payload.id, {
+            ...cachedItem,
+            status: payload.status,
+            progress: payload.progress,
+            downloadedSize: payload.downloadedSize,
+            fileSize: payload.fileSize ?? cachedItem.fileSize,
+            speed: payload.speed,
+            eta: payload.eta,
+            errorMessage: payload.errorMessage,
+            errorCode: payload.errorCode,
+            lastUpdatedAt: Date.now()
+          });
+        }
+
         const windows = BrowserWindow.getAllWindows();
         windows.forEach((win) => {
           win.webContents.send(IPC_EVENTS.DOWNLOAD_STATE_CHANGE, payload);
         });
+
+        const item = downloadItems.get(payload.id);
+        if (item) {
+          notificationService?.handleDownloadStateChange(payload, item);
+        } else {
+          console.warn(`[IPC] Download notification skipped; item not cached: ${payload.id}`);
+        }
       });
     } catch (err) {
       console.error("Failed to initialize NativeDownloadService:", err);
@@ -134,6 +198,8 @@ export function registerIpcHandlers(): void {
     try {
       const service = await ensureDownloadService();
       const data = await service.add(item);
+      downloadItems.set(data.id, data);
+      queueAutoStart();
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -194,6 +260,7 @@ export function registerIpcHandlers(): void {
     try {
       const service = await ensureDownloadService();
       const data = await service.remove(id);
+      downloadItems.delete(id);
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -227,6 +294,7 @@ export function registerIpcHandlers(): void {
       if (downloadService) {
         downloadService.updateSettings(data);
       }
+      notificationService?.updateSettings(data);
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -239,6 +307,7 @@ export function registerIpcHandlers(): void {
       if (downloadService) {
         downloadService.updateSettings(data);
       }
+      notificationService?.updateSettings(data);
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -429,6 +498,12 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SCHEDULER_TICK, async (_, { now }) => {
     try {
       const data = await schedulerService.tick(now);
+      const settings = await settingsService.get();
+      notificationService = notificationService ?? new NativeNotificationService(settings);
+      notificationService.updateSettings(settings);
+      data.triggered.forEach(({ schedule, metadata }) => {
+        notificationService?.notifyScheduledDownload(schedule, metadata);
+      });
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);

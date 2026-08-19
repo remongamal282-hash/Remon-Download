@@ -89,10 +89,13 @@ export class ElectronDownloadService implements DownloadService {
     this.stateChangeUnsubscribe = window.electronAPI!.download.onStateChange((payload: DownloadStateChangePayload) => {
       const item = this.itemsCache.get(payload.id);
       if (item) {
-        // Prevent reverting from terminal/paused states to active states unless it's a valid transition
+        // Main Process events are authoritative because background auto-start can
+        // skip the renderer-only queued -> analyzing transition.
         const isValidTransition = canTransition(item.status, payload.status);
-        
-        if (!isValidTransition) {
+        const isTerminalOrPaused = ["paused", "canceled", "failed", "completed"].includes(item.status);
+        const isStaleActiveEvent = isTerminalOrPaused && ["downloading", "retrying", "merging", "converting"].includes(payload.status);
+
+        if (!isValidTransition && isStaleActiveEvent) {
           console.warn(
             `[ElectronDownloadService] Ignoring invalid state change for ${payload.id}: ${item.status} -> ${payload.status}`
           );

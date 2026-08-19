@@ -315,11 +315,9 @@ function parseChannelMetadata(raw: YtdlpRawPlaylist, url: string): ChannelMetada
 
 // ─── NativeMetadataService ──────────────────────────────────────────────────
 
-// Shared cache instance (singleton) - survives across service instances
-const SHARED_METADATA_CACHE = new MetadataCache<AnalysisResult>(100, 1000 * 60 * 60); // 100 items, 1 hour TTL
-
 export class NativeMetadataService {
   private ytdlpPath: string | null = null;
+  private metadataCache = new MetadataCache<AnalysisResult>(100, 1000 * 60 * 60);
   private executor: ProcessExecutor;
 
   constructor(
@@ -463,7 +461,7 @@ export class NativeMetadataService {
     }
 
     // 🚀 Check cache first for instant results
-    const cachedResult = SHARED_METADATA_CACHE.get(trimmedUrl);
+    const cachedResult = this.metadataCache.get(trimmedUrl);
     if (cachedResult) {
       console.log(`[MetadataService] Cache hit for ${trimmedUrl}`);
       return cachedResult;
@@ -495,7 +493,7 @@ export class NativeMetadataService {
     }
 
     // 💾 Cache the result for future requests (shared cache)
-    SHARED_METADATA_CACHE.set(trimmedUrl, result);
+    this.metadataCache.set(trimmedUrl, result);
     console.log(`[MetadataService] Cached metadata for ${trimmedUrl}`);
 
     return result;

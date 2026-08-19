@@ -24,7 +24,12 @@ import { BrowserWindow, app, Tray, Menu } from "electron";
 
 // Mock Electron modules
 vi.mock("electron", () => ({
-  Tray: vi.fn(),
+  Tray: vi.fn(() => ({
+    on: vi.fn(),
+    setToolTip: vi.fn(),
+    setContextMenu: vi.fn(),
+    destroy: vi.fn()
+  })),
   Menu: {
     buildFromTemplate: vi.fn(() => ({
       popup: vi.fn()
@@ -32,6 +37,12 @@ vi.mock("electron", () => ({
   },
   BrowserWindow: {
     getFocusedWindow: vi.fn()
+  },
+  nativeImage: {
+    createFromPath: vi.fn(() => ({
+      isEmpty: vi.fn(() => false),
+      resize: vi.fn(() => ({ isEmpty: vi.fn(() => false) }))
+    }))
   },
   app: {
     quit: vi.fn()
@@ -44,6 +55,15 @@ describe("Tray Module", () => {
   beforeEach(() => {
     // Clear all mocks before each test
     vi.clearAllMocks();
+    (Tray as any).mockImplementation(() => ({
+      on: vi.fn(),
+      setToolTip: vi.fn(),
+      setContextMenu: vi.fn(),
+      destroy: vi.fn()
+    }));
+    (Menu.buildFromTemplate as any).mockImplementation(() => ({
+      popup: vi.fn()
+    }));
 
     // Setup mock window
     mockWindow = {
@@ -104,7 +124,7 @@ describe("Tray Module", () => {
     });
 
     it("should set up click handler for tray icon", () => {
-      const mockTray = { on: vi.fn(), setToolTip: vi.fn(), setContextMenu: vi.fn() };
+      const mockTray = { on: vi.fn(), setToolTip: vi.fn(), setContextMenu: vi.fn(), destroy: vi.fn() };
       (Tray as any).mockImplementation(() => mockTray);
 
       createTray(mockWindow);
@@ -121,7 +141,8 @@ describe("Tray Module", () => {
           }
         }),
         setToolTip: vi.fn(),
-        setContextMenu: vi.fn()
+        setContextMenu: vi.fn(),
+        destroy: vi.fn()
       };
       (Tray as any).mockImplementation(() => mockTray);
 
@@ -251,7 +272,8 @@ describe("Tray Module", () => {
       const mockTray = {
         on: vi.fn(),
         setToolTip: vi.fn(),
-        setContextMenu: vi.fn()
+        setContextMenu: vi.fn(),
+        destroy: vi.fn()
       };
       (Tray as any).mockImplementation(() => mockTray);
       (Menu.buildFromTemplate as any).mockImplementation((template: any) => {
@@ -273,7 +295,8 @@ describe("Tray Module", () => {
       const mockTray = {
         on: vi.fn(),
         setToolTip: vi.fn(),
-        setContextMenu: vi.fn()
+        setContextMenu: vi.fn(),
+        destroy: vi.fn()
       };
       (Tray as any).mockImplementation(() => mockTray);
       (Menu.buildFromTemplate as any).mockImplementation((template: any) => {
@@ -295,7 +318,8 @@ describe("Tray Module", () => {
       const mockTray = {
         on: vi.fn(),
         setToolTip: vi.fn(),
-        setContextMenu: vi.fn()
+        setContextMenu: vi.fn(),
+        destroy: vi.fn()
       };
       (Tray as any).mockImplementation(() => mockTray);
       (Menu.buildFromTemplate as any).mockImplementation((template: any) => {

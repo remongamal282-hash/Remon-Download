@@ -181,6 +181,43 @@ describe("serviceResolver", () => {
   });
 
   describe("Electron queue transitions", () => {
+    it("accepts authoritative background start state from Main Process", () => {
+      installFakeElectronAPI();
+      const service = new ElectronDownloadService();
+      const metadata: VideoMetadata = {
+        id: "video-background-start",
+        sourceUrl: "https://www.youtube.com/watch?v=background",
+        linkType: "video",
+        thumbnail: "https://example.com/background.jpg",
+        title: "Background Start",
+        channelName: "Test Channel",
+        duration: "10:00",
+        views: 100,
+        qualityOptions: ["720p"],
+        videoFormats: ["mp4"],
+        audioFormats: ["mp3"],
+        resolution: "720p",
+        fps: 30,
+        videoCodec: "H.264",
+        audioCodec: "AAC",
+        videoBitrate: "5 Mbps",
+        audioBitrate: "192 Kbps",
+        container: "mp4",
+        fileSize: 10 * 1024 * 1024,
+        uploadDate: "2026-08-01"
+      };
+
+      const item = service.createFromMetadata(metadata, 1, "720p", "mp4");
+      let updatedItem: DownloadItem | null = null;
+      service.onItemUpdate?.((_id, updated) => {
+        updatedItem = updated;
+      });
+      const onStateChange = (window.electronAPI!.download.onStateChange as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+      onStateChange?.({ id: item.id, status: "downloading", progress: 0, downloadedSize: 0, speed: 0, eta: "--" });
+
+      expect(updatedItem).toMatchObject({ id: item.id, status: "downloading" });
+    });
+
     it("moves a started download out of analyzing immediately in the UI", async () => {
       installFakeElectronAPI();
       const service = new ElectronDownloadService();

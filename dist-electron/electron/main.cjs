@@ -22,11 +22,11 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // electron/main.ts
-var import_electron4 = require("electron");
-var path3 = __toESM(require("path"), 1);
+var import_electron5 = require("electron");
+var path4 = __toESM(require("path"), 1);
 
 // electron/ipc/handlers.ts
-var import_electron3 = require("electron");
+var import_electron4 = require("electron");
 
 // electron/ipc/channels.ts
 var IPC_CHANNELS = {
@@ -109,8 +109,8 @@ var DefaultProcessExecutor = class {
   spawn(command, args, options) {
     return (0, import_child_process.spawn)(command, args, options);
   }
-  async checkAccess(path4, mode) {
-    return (0, import_promises.access)(path4, mode);
+  async checkAccess(path5, mode) {
+    return (0, import_promises.access)(path5, mode);
   }
 };
 function isYouTubeUrl(url) {
@@ -232,7 +232,6 @@ function parseChannelMetadata(raw, url) {
     latestVideos
   };
 }
-var SHARED_METADATA_CACHE = new MetadataCache(100, 1e3 * 60 * 60);
 var NativeMetadataService = class {
   constructor(settingsYtdlpPath, executor) {
     this.settingsYtdlpPath = settingsYtdlpPath;
@@ -240,6 +239,7 @@ var NativeMetadataService = class {
   }
   settingsYtdlpPath;
   ytdlpPath = null;
+  metadataCache = new MetadataCache(100, 1e3 * 60 * 60);
   executor;
   /**
    * Resolves yt-dlp executable path.
@@ -351,7 +351,7 @@ var NativeMetadataService = class {
     if (!isYouTubeUrl(trimmedUrl)) {
       throw new Error("unsupported_url");
     }
-    const cachedResult = SHARED_METADATA_CACHE.get(trimmedUrl);
+    const cachedResult = this.metadataCache.get(trimmedUrl);
     if (cachedResult) {
       console.log(`[MetadataService] Cache hit for ${trimmedUrl}`);
       return cachedResult;
@@ -372,7 +372,7 @@ var NativeMetadataService = class {
       const raw = await this.executeYtdlp(this.ytdlpPath, trimmedUrl, false);
       result = parseVideoMetadata(raw, linkType, 1);
     }
-    SHARED_METADATA_CACHE.set(trimmedUrl, result);
+    this.metadataCache.set(trimmedUrl, result);
     console.log(`[MetadataService] Cached metadata for ${trimmedUrl}`);
     return result;
   }
@@ -389,8 +389,8 @@ var DefaultProcessExecutor2 = class {
     const { spawn: spawn2 } = require("child_process");
     return spawn2(command, args, options);
   }
-  checkAccess(path4, mode) {
-    return fs.access(path4, mode);
+  checkAccess(path5, mode) {
+    return fs.access(path5, mode);
   }
 };
 var NativeDownloadService = class extends import_events.EventEmitter {
@@ -634,6 +634,10 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     if (!currentItem) {
       return;
     }
+    this.updateItemStatus(id, "merging");
+    this.emitStateChange(id, "merging");
+    this.updateItemStatus(id, "converting");
+    this.emitStateChange(id, "converting");
     const finalFileSize = await this.resolveCompletedFileSize(outputPath, currentItem.fileSize);
     this.updateItemStatus(id, "completed", {
       progress: 100,
@@ -843,6 +847,10 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       this.ingestProgressOutput(item.id, generation, activeDownload, chunk, stderrProgressBuffer);
     });
     proc.on("exit", async (code) => {
+      if (activeDownload.isStopped) {
+        this.activeDownloads.delete(item.id);
+        return;
+      }
       if (!this.isCurrentProcess(item.id, generation)) {
         console.log(`[Download] Exit ignored: ${item.id} (stale generation)`);
         return;
@@ -937,7 +945,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     if (stderrLower.includes("network error") || stderrLower.includes("connection error") || stderrLower.includes("timeout error")) {
       return { code: "network_error", message: "Network error - check your connection" };
     }
-    if (stderrLower.includes("ffmpeg error") || stderrLower.includes("postprocessor error")) {
+    if (stderrLower.includes("ffmpeg error") || stderrLower.includes("ffmpeg failed") || stderrLower.includes("postprocessor error")) {
       return { code: "ffmpeg_error", message: "FFmpeg processing failed - check FFmpeg installation" };
     }
     return { code: "ytdlp_error", message: `Download failed with exit code ${exitCode}` };
@@ -1012,15 +1020,15 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       console.log(`[Download] \u2713 Found active process for ${id}, marking as stopped...`);
       activeDownload.isStopped = true;
       const proc = activeDownload.process;
-      if (proc.stdout) {
+      if (proc.stdout && typeof proc.stdout.destroy === "function") {
         proc.stdout.destroy();
         console.log(`[Download] \u2713 Closed stdout stream for ${id}`);
       }
-      if (proc.stderr) {
+      if (proc.stderr && typeof proc.stderr.destroy === "function") {
         proc.stderr.destroy();
         console.log(`[Download] \u2713 Closed stderr stream for ${id}`);
       }
-      if (proc.stdin) {
+      if (proc.stdin && typeof proc.stdin.destroy === "function") {
         proc.stdin.destroy();
         console.log(`[Download] \u2713 Closed stdin stream for ${id}`);
       }
@@ -1143,15 +1151,15 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       console.log(`[Download] \u2713 Found active process for ${id}, marking as stopped...`);
       activeDownload.isStopped = true;
       const proc = activeDownload.process;
-      if (proc.stdout) {
+      if (proc.stdout && typeof proc.stdout.destroy === "function") {
         proc.stdout.destroy();
         console.log(`[Download] \u2713 Closed stdout stream for ${id}`);
       }
-      if (proc.stderr) {
+      if (proc.stderr && typeof proc.stderr.destroy === "function") {
         proc.stderr.destroy();
         console.log(`[Download] \u2713 Closed stderr stream for ${id}`);
       }
-      if (proc.stdin) {
+      if (proc.stdin && typeof proc.stdin.destroy === "function") {
         proc.stdin.destroy();
         console.log(`[Download] \u2713 Closed stdin stream for ${id}`);
       }
@@ -1272,8 +1280,14 @@ var NativeDownloadService = class extends import_events.EventEmitter {
    */
   cleanup() {
     for (const [id, activeDownload] of this.activeDownloads.entries()) {
+      activeDownload.isStopped = true;
+      this.nextProcessGeneration(id);
       if (activeDownload.process) {
         activeDownload.process.kill();
+      }
+      const item = this.items.get(id);
+      if (item && ["downloading", "retrying", "merging", "converting"].includes(item.status)) {
+        this.updateItemStatus(id, "canceled", { speed: 0, eta: "--" });
       }
     }
     this.activeDownloads.clear();
@@ -1308,9 +1322,9 @@ var import_fs2 = require("fs");
 var import_path = require("path");
 var import_electron = require("electron");
 var realFs = {
-  mkdir: (path4, options) => import_fs2.promises.mkdir(path4, options).then(() => void 0),
-  readFile: (path4, encoding) => import_fs2.promises.readFile(path4, encoding),
-  writeFile: (path4, data, encoding) => import_fs2.promises.writeFile(path4, data, encoding)
+  mkdir: (path5, options) => import_fs2.promises.mkdir(path5, options).then(() => void 0),
+  readFile: (path5, encoding) => import_fs2.promises.readFile(path5, encoding),
+  writeFile: (path5, data, encoding) => import_fs2.promises.writeFile(path5, data, encoding)
 };
 var realApp = {
   getUserDataPath: () => import_electron.app.getPath("userData")
@@ -1423,185 +1437,6 @@ var NativeSettingsService = class {
     this.settings = { ...DEFAULT_SETTINGS };
     await this.persist();
     return { ...this.settings };
-  }
-};
-
-// electron/services/nativeHistoryService.ts
-function isHistoryFileFormat(value) {
-  return !!value && typeof value === "object" && "data" in value && Array.isArray(value.data);
-}
-function normalizeHistoryItem(item) {
-  if (!item || typeof item !== "object") {
-    return null;
-  }
-  const dateValue = typeof item.date === "string" ? item.date : (/* @__PURE__ */ new Date()).toISOString();
-  return {
-    id: String(item.id ?? crypto.randomUUID()),
-    sourceDownloadId: String(item.sourceDownloadId ?? ""),
-    metadataId: String(item.metadataId ?? ""),
-    thumbnail: String(item.thumbnail ?? ""),
-    title: String(item.title ?? "Untitled Download"),
-    sourceUrl: String(item.sourceUrl ?? item["url"] ?? ""),
-    // Fallback to legacy 'url' if exists
-    date: dateValue,
-    quality: String(item.quality ?? "Unknown"),
-    format: String(item.format ?? "Unknown"),
-    fileSize: typeof item.fileSize === "number" ? item.fileSize : typeof item.size === "number" ? item.size : 0,
-    // Fallback to legacy 'size' if exists
-    status: item.status === "completed" || item.status === "failed" || item.status === "canceled" ? item.status : "completed",
-    errorCode: item.errorCode,
-    errorMessage: item.errorMessage ? String(item.errorMessage) : void 0
-  };
-}
-var NativeHistoryService = class {
-  items = [];
-  HISTORY_FILE = "history.json";
-  FILE_VERSION = "1.0.0";
-  initializationPromise = null;
-  /**
-   * Initialize service by loading history from disk
-   * Must be called after construction
-   */
-  async initialize() {
-    if (this.initializationPromise) {
-      return this.initializationPromise;
-    }
-    this.initializationPromise = (async () => {
-      const fileData = await readJsonFile(this.HISTORY_FILE, {
-        version: this.FILE_VERSION,
-        data: []
-      });
-      if (isHistoryFileFormat(fileData)) {
-        this.items = fileData.data.map((item) => normalizeHistoryItem(item)).filter((item) => item !== null);
-        return;
-      }
-      this.items = [];
-    })();
-    return this.initializationPromise;
-  }
-  /**
-   * Ensure service is initialized before proceeding
-   */
-  async ensureInitialized() {
-    if (!this.initializationPromise) {
-      await this.initialize();
-    } else {
-      await this.initializationPromise;
-    }
-  }
-  /**
-   * Persist current history to disk
-   */
-  async persist() {
-    await writeJsonFile(this.HISTORY_FILE, {
-      version: this.FILE_VERSION,
-      data: this.items
-    });
-  }
-  async getAll() {
-    await this.ensureInitialized();
-    return [...this.items];
-  }
-  async add(item) {
-    await this.ensureInitialized();
-    this.items = [item, ...this.items.filter((i) => i.id !== item.id)];
-    await this.persist();
-    return item;
-  }
-  async remove(id) {
-    await this.ensureInitialized();
-    this.items = this.items.filter((i) => i.id !== id);
-    await this.persist();
-    return id;
-  }
-  async clear() {
-    await this.ensureInitialized();
-    this.items = [];
-    await this.persist();
-  }
-};
-
-// electron/services/nativeFavoritesService.ts
-function isFavoritesFileFormat(value) {
-  return !!value && typeof value === "object" && "data" in value && Array.isArray(value.data);
-}
-function normalizeFavoriteItem(item) {
-  if (!item || typeof item !== "object") {
-    return null;
-  }
-  const dateValue = typeof item.dateAdded === "string" ? item.dateAdded : (/* @__PURE__ */ new Date()).toISOString();
-  const parsedDate = new Date(dateValue);
-  const normalizedDate = Number.isNaN(parsedDate.getTime()) ? (/* @__PURE__ */ new Date()).toISOString() : parsedDate.toISOString();
-  return {
-    id: String(item.id ?? crypto.randomUUID()),
-    sourceUrl: String(item.sourceUrl ?? ""),
-    thumbnail: String(item.thumbnail ?? ""),
-    title: String(item.title ?? "Untitled Favorite"),
-    channel: String(item.channel ?? "Unknown channel"),
-    dateAdded: normalizedDate
-  };
-}
-var NativeFavoritesService = class {
-  items = [];
-  FAVORITES_FILE = "favorites.json";
-  FILE_VERSION = "1.0.0";
-  initializationPromise = null;
-  /**
-   * Initialize service by loading favorites from disk
-   * Must be called after construction
-   */
-  async initialize() {
-    if (this.initializationPromise) {
-      return this.initializationPromise;
-    }
-    this.initializationPromise = (async () => {
-      const fileData = await readJsonFile(
-        this.FAVORITES_FILE,
-        {
-          version: this.FILE_VERSION,
-          data: []
-        }
-      );
-      if (isFavoritesFileFormat(fileData)) {
-        this.items = fileData.data.map((item) => normalizeFavoriteItem(item)).filter((item) => item !== null);
-        return;
-      }
-      this.items = [];
-    })();
-    return this.initializationPromise;
-  }
-  /**
-   * Ensure service is initialized before proceeding
-   */
-  async ensureInitialized() {
-    if (!this.initializationPromise) {
-      await this.initialize();
-    } else {
-      await this.initializationPromise;
-    }
-  }
-  /**
-   * Persist current favorites to disk
-   */
-  async persist() {
-    await writeJsonFile(this.FAVORITES_FILE, {
-      version: this.FILE_VERSION,
-      data: this.items
-    });
-  }
-  async getAll() {
-    await this.ensureInitialized();
-    return [...this.items];
-  }
-  async add(item) {
-    this.items = [item, ...this.items.filter((i) => i.id !== item.id)];
-    await this.persist();
-    return item;
-  }
-  async remove(id) {
-    this.items = this.items.filter((i) => i.id !== id);
-    await this.persist();
-    return id;
   }
 };
 
@@ -1864,13 +1699,380 @@ var NativeSchedulerService = class {
   }
 };
 
-// electron/tray.ts
+// electron/services/nativeHistoryService.ts
+function isHistoryFileFormat(value) {
+  return !!value && typeof value === "object" && "data" in value && Array.isArray(value.data);
+}
+function normalizeHistoryItem(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  const dateValue = typeof item.date === "string" ? item.date : (/* @__PURE__ */ new Date()).toISOString();
+  return {
+    id: String(item.id ?? crypto.randomUUID()),
+    sourceDownloadId: String(item.sourceDownloadId ?? ""),
+    metadataId: String(item.metadataId ?? ""),
+    thumbnail: String(item.thumbnail ?? ""),
+    title: String(item.title ?? "Untitled Download"),
+    sourceUrl: String(item.sourceUrl ?? item["url"] ?? ""),
+    // Fallback to legacy 'url' if exists
+    date: dateValue,
+    quality: String(item.quality ?? "Unknown"),
+    format: String(item.format ?? "Unknown"),
+    fileSize: typeof item.fileSize === "number" ? item.fileSize : typeof item.size === "number" ? item.size : 0,
+    // Fallback to legacy 'size' if exists
+    status: item.status === "completed" || item.status === "failed" || item.status === "canceled" ? item.status : "completed",
+    errorCode: item.errorCode,
+    errorMessage: item.errorMessage ? String(item.errorMessage) : void 0
+  };
+}
+var NativeHistoryService = class {
+  items = [];
+  HISTORY_FILE = "history.json";
+  FILE_VERSION = "1.0.0";
+  initializationPromise = null;
+  /**
+   * Initialize service by loading history from disk
+   * Must be called after construction
+   */
+  async initialize() {
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+    this.initializationPromise = (async () => {
+      const fileData = await readJsonFile(this.HISTORY_FILE, {
+        version: this.FILE_VERSION,
+        data: []
+      });
+      if (isHistoryFileFormat(fileData)) {
+        this.items = fileData.data.map((item) => normalizeHistoryItem(item)).filter((item) => item !== null);
+        return;
+      }
+      this.items = [];
+    })();
+    return this.initializationPromise;
+  }
+  /**
+   * Ensure service is initialized before proceeding
+   */
+  async ensureInitialized() {
+    if (!this.initializationPromise) {
+      await this.initialize();
+    } else {
+      await this.initializationPromise;
+    }
+  }
+  /**
+   * Persist current history to disk
+   */
+  async persist() {
+    await writeJsonFile(this.HISTORY_FILE, {
+      version: this.FILE_VERSION,
+      data: this.items
+    });
+  }
+  async getAll() {
+    await this.ensureInitialized();
+    return [...this.items];
+  }
+  async add(item) {
+    await this.ensureInitialized();
+    this.items = [item, ...this.items.filter((i) => i.id !== item.id)];
+    await this.persist();
+    return item;
+  }
+  async remove(id) {
+    await this.ensureInitialized();
+    this.items = this.items.filter((i) => i.id !== id);
+    await this.persist();
+    return id;
+  }
+  async clear() {
+    await this.ensureInitialized();
+    this.items = [];
+    await this.persist();
+  }
+};
+
+// electron/services/nativeFavoritesService.ts
+function isFavoritesFileFormat(value) {
+  return !!value && typeof value === "object" && "data" in value && Array.isArray(value.data);
+}
+function normalizeFavoriteItem(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  const dateValue = typeof item.dateAdded === "string" ? item.dateAdded : (/* @__PURE__ */ new Date()).toISOString();
+  const parsedDate = new Date(dateValue);
+  const normalizedDate = Number.isNaN(parsedDate.getTime()) ? (/* @__PURE__ */ new Date()).toISOString() : parsedDate.toISOString();
+  return {
+    id: String(item.id ?? crypto.randomUUID()),
+    sourceUrl: String(item.sourceUrl ?? ""),
+    thumbnail: String(item.thumbnail ?? ""),
+    title: String(item.title ?? "Untitled Favorite"),
+    channel: String(item.channel ?? "Unknown channel"),
+    dateAdded: normalizedDate
+  };
+}
+var NativeFavoritesService = class {
+  items = [];
+  FAVORITES_FILE = "favorites.json";
+  FILE_VERSION = "1.0.0";
+  initializationPromise = null;
+  /**
+   * Initialize service by loading favorites from disk
+   * Must be called after construction
+   */
+  async initialize() {
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+    this.initializationPromise = (async () => {
+      const fileData = await readJsonFile(
+        this.FAVORITES_FILE,
+        {
+          version: this.FILE_VERSION,
+          data: []
+        }
+      );
+      if (isFavoritesFileFormat(fileData)) {
+        this.items = fileData.data.map((item) => normalizeFavoriteItem(item)).filter((item) => item !== null);
+        return;
+      }
+      this.items = [];
+    })();
+    return this.initializationPromise;
+  }
+  /**
+   * Ensure service is initialized before proceeding
+   */
+  async ensureInitialized() {
+    if (!this.initializationPromise) {
+      await this.initialize();
+    } else {
+      await this.initializationPromise;
+    }
+  }
+  /**
+   * Persist current favorites to disk
+   */
+  async persist() {
+    await writeJsonFile(this.FAVORITES_FILE, {
+      version: this.FILE_VERSION,
+      data: this.items
+    });
+  }
+  async getAll() {
+    await this.ensureInitialized();
+    return [...this.items];
+  }
+  async add(item) {
+    this.items = [item, ...this.items.filter((i) => i.id !== item.id)];
+    await this.persist();
+    return item;
+  }
+  async remove(id) {
+    this.items = this.items.filter((i) => i.id !== id);
+    await this.persist();
+    return id;
+  }
+};
+
+// electron/services/nativeNotificationService.ts
 var import_electron2 = require("electron");
+var import_crypto = require("crypto");
+var import_fs3 = require("fs");
 var path2 = __toESM(require("path"), 1);
+var NativeNotificationService = class {
+  settings;
+  sentKeys = /* @__PURE__ */ new Set();
+  pendingKeys = /* @__PURE__ */ new Set();
+  thumbnailPaths = /* @__PURE__ */ new Map();
+  constructor(settings) {
+    this.settings = settings;
+  }
+  updateSettings(settings) {
+    this.settings = settings;
+  }
+  handleDownloadStateChange(payload, item) {
+    if (payload.status === "retrying") {
+      this.sentKeys.delete(`completed:${payload.id}`);
+      this.sentKeys.delete(`failed:${payload.id}`);
+      return;
+    }
+    if (payload.status === "completed") {
+      if (!this.settings.enableNotifications || !this.settings.notificationWhenCompleted) {
+        console.log(`[Notification] Completion notification disabled: ${payload.id}`);
+        return;
+      }
+      this.sendDownloadOnce(`completed:${payload.id}`, {
+        title: item.title || "Remon Download",
+        body: this.settings.language === "ar" ? "\u062A\u0645 \u062A\u062D\u0645\u064A\u0644 \u0627\u0644\u0641\u064A\u062F\u064A\u0648 \u0628\u0646\u062C\u0627\u062D" : "Download completed successfully"
+      }, item.thumbnail);
+      return;
+    }
+    if (payload.status === "failed") {
+      if (!this.settings.enableNotifications || !this.settings.notificationWhenFailed) {
+        console.log(`[Notification] Failure notification disabled: ${payload.id}`);
+        return;
+      }
+      this.sendDownloadOnce(`failed:${payload.id}`, {
+        title: item.title || "Remon Download",
+        body: this.getFailureNotificationMessage(payload.errorCode, payload.errorMessage)
+      }, item.thumbnail);
+    }
+  }
+  getFailureNotificationMessage(errorCode, errorMessage) {
+    if (this.settings.language !== "ar") {
+      if (errorMessage?.match(/exit code\s+.+$/i)) {
+        return "Download failed during processing";
+      }
+      return errorMessage || "Download failed";
+    }
+    if (errorCode === "network_error") {
+      return "\u0641\u0634\u0644 \u062A\u062D\u0645\u064A\u0644 \u0627\u0644\u0641\u064A\u062F\u064A\u0648 \u0628\u0633\u0628\u0628 \u062E\u0637\u0623 \u0641\u064A \u0627\u0644\u0634\u0628\u0643\u0629";
+    }
+    if (errorCode === "video_unavailable") {
+      return "\u0627\u0644\u0641\u064A\u062F\u064A\u0648 \u063A\u064A\u0631 \u0645\u062A\u0627\u062D \u0623\u0648 \u062A\u0645\u062A \u0625\u0632\u0627\u0644\u062A\u0647";
+    }
+    if (errorCode === "video_private") {
+      return "\u0627\u0644\u0641\u064A\u062F\u064A\u0648 \u062E\u0627\u0635 \u0623\u0648 \u064A\u062A\u0637\u0644\u0628 \u0635\u0644\u0627\u062D\u064A\u0629 \u0644\u0644\u0648\u0635\u0648\u0644 \u0625\u0644\u064A\u0647";
+    }
+    if (errorCode === "ffmpeg_error") {
+      return "\u0641\u0634\u0644 \u062A\u062C\u0647\u064A\u0632 \u0627\u0644\u0641\u064A\u062F\u064A\u0648 \u0628\u0648\u0627\u0633\u0637\u0629 FFmpeg";
+    }
+    if (errorCode === "ytdlp_not_found") {
+      return "\u062A\u0639\u0630\u0631 \u0627\u0644\u0639\u062B\u0648\u0631 \u0639\u0644\u0649 yt-dlp";
+    }
+    const normalizedMessage = errorMessage?.toLowerCase() ?? "";
+    if (normalizedMessage.includes("network") || normalizedMessage.includes("connection")) {
+      return "\u0641\u0634\u0644 \u062A\u062D\u0645\u064A\u0644 \u0627\u0644\u0641\u064A\u062F\u064A\u0648 \u0628\u0633\u0628\u0628 \u062E\u0637\u0623 \u0641\u064A \u0627\u0644\u0634\u0628\u0643\u0629";
+    }
+    if (normalizedMessage.includes("private") || normalizedMessage.includes("members-only")) {
+      return "\u0627\u0644\u0641\u064A\u062F\u064A\u0648 \u062E\u0627\u0635 \u0623\u0648 \u064A\u062A\u0637\u0644\u0628 \u0635\u0644\u0627\u062D\u064A\u0629 \u0644\u0644\u0648\u0635\u0648\u0644 \u0625\u0644\u064A\u0647";
+    }
+    if (normalizedMessage.includes("unavailable") || normalizedMessage.includes("not available")) {
+      return "\u0627\u0644\u0641\u064A\u062F\u064A\u0648 \u063A\u064A\u0631 \u0645\u062A\u0627\u062D \u0623\u0648 \u062A\u0645\u062A \u0625\u0632\u0627\u0644\u062A\u0647";
+    }
+    if (normalizedMessage.includes("ffmpeg") || normalizedMessage.includes("postprocessor")) {
+      return "\u0641\u0634\u0644 \u062A\u062C\u0647\u064A\u0632 \u0627\u0644\u0641\u064A\u062F\u064A\u0648 \u0628\u0648\u0627\u0633\u0637\u0629 FFmpeg";
+    }
+    if (normalizedMessage.includes("permission") || normalizedMessage.includes("access denied")) {
+      return "\u0644\u0627 \u062A\u0648\u062C\u062F \u0635\u0644\u0627\u062D\u064A\u0629 \u0643\u0627\u0641\u064A\u0629 \u0644\u062D\u0641\u0638 \u0627\u0644\u0641\u064A\u062F\u064A\u0648";
+    }
+    if (normalizedMessage.includes("disk full") || normalizedMessage.includes("no space")) {
+      return "\u0644\u0627 \u062A\u0648\u062C\u062F \u0645\u0633\u0627\u062D\u0629 \u0643\u0627\u0641\u064A\u0629 \u0644\u062D\u0641\u0638 \u0627\u0644\u0641\u064A\u062F\u064A\u0648";
+    }
+    const exitCodeMatch = errorMessage?.match(/exit code\s+(.+)$/i);
+    if (exitCodeMatch?.[1]) {
+      return "\u062A\u0639\u0630\u0631 \u062A\u062D\u0645\u064A\u0644 \u0627\u0644\u0641\u064A\u062F\u064A\u0648 \u0628\u0633\u0628\u0628 \u062E\u0637\u0623 \u0623\u062B\u0646\u0627\u0621 \u0627\u0644\u0645\u0639\u0627\u0644\u062C\u0629";
+    }
+    return "\u0641\u0634\u0644 \u062A\u062D\u0645\u064A\u0644 \u0627\u0644\u0641\u064A\u062F\u064A\u0648";
+  }
+  notifyScheduledDownload(schedule, metadata) {
+    if (!this.settings.enableNotifications) {
+      console.log(`[Notification] Scheduled notification disabled: ${schedule.id}`);
+      return;
+    }
+    this.sendDownloadOnce(`scheduled:${schedule.id}:${schedule.triggerCount}`, {
+      title: metadata?.title || (this.settings.language === "ar" ? "\u062A\u062D\u0645\u064A\u0644 \u0645\u062C\u062F\u0648\u0644" : "Scheduled Download"),
+      body: this.settings.language === "ar" ? "\u062A\u0645\u062A \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u062A\u062D\u0645\u064A\u0644 \u0627\u0644\u0645\u062C\u062F\u0648\u0644 \u0625\u0644\u0649 \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u062A\u0646\u0632\u064A\u0644\u0627\u062A" : "Scheduled download queued"
+    }, metadata?.thumbnail);
+  }
+  sendOnce(key, options) {
+    if (this.sentKeys.has(key) || this.pendingKeys.has(key)) {
+      console.log(`[Notification] Duplicate suppressed: ${key}`);
+      return;
+    }
+    try {
+      if (!import_electron2.Notification.isSupported()) {
+        console.warn(`[Notification] Windows notifications are not supported: ${key}`);
+        return;
+      }
+      const notification = new import_electron2.Notification(options);
+      notification.show();
+      this.sentKeys.add(key);
+      console.log(`[Notification] Shown: ${key}`);
+    } catch (error) {
+      console.error(`[Notification] Failed to show notification (${key}):`, error);
+    }
+  }
+  sendDownloadOnce(key, options, thumbnailUrl) {
+    if (!thumbnailUrl || !/^https?:\/\//i.test(thumbnailUrl)) {
+      this.sendOnce(key, options);
+      return;
+    }
+    if (this.sentKeys.has(key) || this.pendingKeys.has(key)) {
+      console.log(`[Notification] Duplicate suppressed: ${key}`);
+      return;
+    }
+    this.pendingKeys.add(key);
+    void this.resolveThumbnailPath(thumbnailUrl).then((icon) => {
+      this.pendingKeys.delete(key);
+      this.showNotification(key, { ...options, icon });
+    }).catch((error) => {
+      this.pendingKeys.delete(key);
+      console.warn(`[Notification] Thumbnail unavailable for ${key}:`, error);
+      this.sendOnce(key, options);
+    });
+  }
+  showNotification(key, options) {
+    if (this.sentKeys.has(key)) {
+      return;
+    }
+    try {
+      if (!import_electron2.Notification.isSupported()) {
+        console.warn(`[Notification] Windows notifications are not supported: ${key}`);
+        return;
+      }
+      const icon = options.icon ? import_electron2.nativeImage.createFromPath(options.icon) : void 0;
+      const notificationOptions = icon ? { ...options, icon } : options;
+      const notification = new import_electron2.Notification(notificationOptions);
+      if (icon?.isEmpty()) {
+        console.warn(`[Notification] Thumbnail image is empty: ${options.icon}`);
+      }
+      notification.show();
+      this.sentKeys.add(key);
+      console.log(`[Notification] Shown: ${key}${options.icon ? " with thumbnail" : ""}`);
+    } catch (error) {
+      console.error(`[Notification] Failed to show notification (${key}):`, error);
+    }
+  }
+  async resolveThumbnailPath(thumbnailUrl) {
+    const cachedPath = this.thumbnailPaths.get(thumbnailUrl);
+    if (cachedPath) {
+      return cachedPath;
+    }
+    const response = await fetch(thumbnailUrl, { signal: AbortSignal.timeout(5e3) });
+    if (!response.ok) {
+      throw new Error(`Thumbnail request failed with status ${response.status}`);
+    }
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    const extension = contentType.includes("png") ? ".png" : contentType.includes("webp") ? ".webp" : ".jpg";
+    const thumbnailDirectory = path2.join(import_electron2.app.getPath("temp"), "remon-download-thumbnails");
+    const thumbnailPath = path2.join(
+      thumbnailDirectory,
+      `${(0, import_crypto.createHash)("sha256").update(thumbnailUrl).digest("hex")}${extension}`
+    );
+    try {
+      await import_fs3.promises.access(thumbnailPath);
+    } catch {
+      await import_fs3.promises.mkdir(thumbnailDirectory, { recursive: true });
+      const imageData = Buffer.from(await response.arrayBuffer());
+      await import_fs3.promises.writeFile(thumbnailPath, imageData);
+    }
+    this.thumbnailPaths.set(thumbnailUrl, thumbnailPath);
+    return thumbnailPath;
+  }
+};
+
+// electron/tray.ts
+var import_electron3 = require("electron");
+var path3 = __toESM(require("path"), 1);
 var tray = null;
 var getIconPath = () => {
-  const iconPath = path2.resolve(__dirname, "../../icon.png");
-  return iconPath;
+  const applicationPath = typeof import_electron3.app.getAppPath === "function" ? import_electron3.app.getAppPath() : path3.resolve(__dirname, "../..");
+  return path3.join(applicationPath, "icon.png");
 };
 function createTray(mainWindow2) {
   if (tray) {
@@ -1879,9 +2081,13 @@ function createTray(mainWindow2) {
   }
   try {
     const iconPath = getIconPath();
-    tray = new import_electron2.Tray(iconPath);
+    const icon = import_electron3.nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+    if (icon.isEmpty()) {
+      throw new Error(`Tray icon could not be loaded: ${iconPath}`);
+    }
+    tray = new import_electron3.Tray(icon);
     tray.setToolTip("Remon Download");
-    const contextMenu = import_electron2.Menu.buildFromTemplate([
+    const contextMenu = import_electron3.Menu.buildFromTemplate([
       {
         label: "Show Remon Download",
         click: () => {
@@ -1935,12 +2141,9 @@ function hideWindow(mainWindow2) {
   mainWindow2.hide();
   console.log("[Tray] Window hidden");
 }
-function minimizeToTray(mainWindow2) {
-  hideWindow(mainWindow2);
-}
 function quitApplication() {
   console.log("[Tray] Quitting application...");
-  import_electron2.app.quit();
+  import_electron3.app.quit();
 }
 function destroyTray() {
   if (tray) {
@@ -1968,6 +2171,7 @@ function registerIpcHandlers() {
   const historyService = new NativeHistoryService();
   const favoritesService = new NativeFavoritesService();
   const schedulerService = new NativeSchedulerService();
+  let notificationService = null;
   const initServices = async () => {
     try {
       await settingsService.initialize();
@@ -1997,22 +2201,75 @@ function registerIpcHandlers() {
   void initServices();
   let downloadService = null;
   let downloadServiceReady = false;
+  const downloadItems = /* @__PURE__ */ new Map();
+  let startQueuedDownloadsPromise = Promise.resolve();
+  const startQueuedDownloads = async () => {
+    const service = await ensureDownloadService();
+    const settings = await settingsService.get();
+    const items = await service.getAll();
+    const activeStatuses = ["downloading", "retrying", "merging", "converting"];
+    let availableSlots = Math.max(
+      0,
+      settings.concurrentDownloads - items.filter((item) => activeStatuses.includes(item.status)).length
+    );
+    for (const item of items.sort((left, right) => left.order - right.order)) {
+      if (availableSlots <= 0) {
+        break;
+      }
+      if (item.status !== "queued") {
+        continue;
+      }
+      try {
+        await service.start(item.id);
+        availableSlots -= 1;
+      } catch (error) {
+        console.error(`[IPC] Failed to auto-start queued download ${item.id}:`, error);
+      }
+    }
+  };
+  const queueAutoStart = () => {
+    startQueuedDownloadsPromise = startQueuedDownloadsPromise.then(() => startQueuedDownloads()).catch((error) => {
+      console.error("[IPC] Failed to start queued downloads:", error);
+    });
+  };
   const initDownloadService = async () => {
     try {
       const settings = await settingsService.get();
       downloadService = new NativeDownloadService(settings);
+      notificationService = notificationService ?? new NativeNotificationService(settings);
       downloadServiceReady = true;
       downloadService.on("download:progress", (payload) => {
-        const windows = import_electron3.BrowserWindow.getAllWindows();
+        const windows = import_electron4.BrowserWindow.getAllWindows();
         windows.forEach((win) => {
           win.webContents.send(IPC_EVENTS.DOWNLOAD_PROGRESS, payload);
         });
       });
       downloadService.on("download:state-change", (payload) => {
-        const windows = import_electron3.BrowserWindow.getAllWindows();
+        const cachedItem = downloadItems.get(payload.id);
+        if (cachedItem) {
+          downloadItems.set(payload.id, {
+            ...cachedItem,
+            status: payload.status,
+            progress: payload.progress,
+            downloadedSize: payload.downloadedSize,
+            fileSize: payload.fileSize ?? cachedItem.fileSize,
+            speed: payload.speed,
+            eta: payload.eta,
+            errorMessage: payload.errorMessage,
+            errorCode: payload.errorCode,
+            lastUpdatedAt: Date.now()
+          });
+        }
+        const windows = import_electron4.BrowserWindow.getAllWindows();
         windows.forEach((win) => {
           win.webContents.send(IPC_EVENTS.DOWNLOAD_STATE_CHANGE, payload);
         });
+        const item = downloadItems.get(payload.id);
+        if (item) {
+          notificationService?.handleDownloadStateChange(payload, item);
+        } else {
+          console.warn(`[IPC] Download notification skipped; item not cached: ${payload.id}`);
+        }
       });
     } catch (err) {
       console.error("Failed to initialize NativeDownloadService:", err);
@@ -2028,7 +2285,7 @@ function registerIpcHandlers() {
     }
     return downloadService;
   };
-  import_electron3.ipcMain.handle(IPC_CHANNELS.METADATA_ANALYZE, async (_, { url }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.METADATA_ANALYZE, async (_, { url }) => {
     try {
       const settings = await settingsService.get();
       const metadataService = new NativeMetadataService(settings.ytdlpPath);
@@ -2038,7 +2295,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_GET_ALL, async () => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_GET_ALL, async () => {
     try {
       const service = await ensureDownloadService();
       const data = await service.getAll();
@@ -2047,16 +2304,18 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_ADD, async (_, { item }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_ADD, async (_, { item }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.add(item);
+      downloadItems.set(data.id, data);
+      queueAutoStart();
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_START, async (_, { id }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_START, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.start(id);
@@ -2065,7 +2324,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_PAUSE, async (_, { id }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_PAUSE, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.pause(id);
@@ -2074,7 +2333,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_RESUME, async (_, { id }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_RESUME, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.resume(id);
@@ -2083,7 +2342,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_CANCEL, async (_, { id }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_CANCEL, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.cancel(id);
@@ -2092,7 +2351,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_RETRY, async (_, { id }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_RETRY, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.retry(id);
@@ -2101,16 +2360,17 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_REMOVE, async (_, { id }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_REMOVE, async (_, { id }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.remove(id);
+      downloadItems.delete(id);
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_REORDER, async (_, { orderedIds }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_REORDER, async (_, { orderedIds }) => {
     try {
       const service = await ensureDownloadService();
       const data = await service.reorder(orderedIds);
@@ -2119,7 +2379,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.SETTINGS_GET, async () => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.SETTINGS_GET, async () => {
     try {
       const data = await settingsService.get();
       return wrapSuccess(data);
@@ -2127,46 +2387,48 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.SETTINGS_UPDATE, async (_, { settings }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.SETTINGS_UPDATE, async (_, { settings }) => {
     try {
       const data = await settingsService.update(settings);
       if (downloadService) {
         downloadService.updateSettings(data);
       }
+      notificationService?.updateSettings(data);
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.SETTINGS_RESET, async () => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.SETTINGS_RESET, async () => {
     try {
       const data = await settingsService.reset();
       if (downloadService) {
         downloadService.updateSettings(data);
       }
+      notificationService?.updateSettings(data);
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, async () => {
-    const focusedWindow = import_electron3.BrowserWindow.getFocusedWindow();
+  import_electron4.ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, async () => {
+    const focusedWindow = import_electron4.BrowserWindow.getFocusedWindow();
     if (focusedWindow) {
       focusedWindow.minimize();
     }
     return wrapSuccess(void 0);
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.WINDOW_CLOSE, async () => {
-    const focusedWindow = import_electron3.BrowserWindow.getFocusedWindow();
+  import_electron4.ipcMain.handle(IPC_CHANNELS.WINDOW_CLOSE, async () => {
+    const focusedWindow = import_electron4.BrowserWindow.getFocusedWindow();
     if (focusedWindow) {
       hideWindow(focusedWindow);
     }
     return wrapSuccess(void 0);
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.SETTINGS_SELECT_DOWNLOAD_FOLDER, async () => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.SETTINGS_SELECT_DOWNLOAD_FOLDER, async () => {
     try {
-      const focusedWindow = import_electron3.BrowserWindow.getFocusedWindow();
-      const result = await import_electron3.dialog.showOpenDialog(focusedWindow || new import_electron3.BrowserWindow(), {
+      const focusedWindow = import_electron4.BrowserWindow.getFocusedWindow();
+      const result = await import_electron4.dialog.showOpenDialog(focusedWindow || new import_electron4.BrowserWindow(), {
         properties: ["openDirectory"]
       });
       if (result.canceled || result.filePaths.length === 0) {
@@ -2184,29 +2446,29 @@ function registerIpcHandlers() {
   });
   function resolveDownloadFolderPath(folderPath) {
     if (!folderPath || folderPath.trim() === "") {
-      return import_electron3.app.getPath("downloads");
+      return import_electron4.app.getPath("downloads");
     }
     if (folderPath === "~") {
-      return import_electron3.app.getPath("home");
+      return import_electron4.app.getPath("home");
     }
     if (folderPath.startsWith("~/")) {
-      return `${import_electron3.app.getPath("home")}${folderPath.slice(1)}`;
+      return `${import_electron4.app.getPath("home")}${folderPath.slice(1)}`;
     }
     if (folderPath.startsWith("~\\")) {
-      return `${import_electron3.app.getPath("home")}${folderPath.slice(1)}`;
+      return `${import_electron4.app.getPath("home")}${folderPath.slice(1)}`;
     }
     return folderPath;
   }
-  import_electron3.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_OPEN_FOLDER, async (_, { path: path4 }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_OPEN_FOLDER, async (_, { path: path5 }) => {
     try {
-      const folderPath = resolveDownloadFolderPath(path4 ?? "");
-      await import_electron3.shell.openPath(folderPath);
+      const folderPath = resolveDownloadFolderPath(path5 ?? "");
+      await import_electron4.shell.openPath(folderPath);
       return wrapSuccess(void 0);
     } catch (err) {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.HISTORY_GET_ALL, async () => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.HISTORY_GET_ALL, async () => {
     try {
       const data = await historyService.getAll();
       return wrapSuccess(data);
@@ -2214,7 +2476,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.HISTORY_ADD, async (_, { item }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.HISTORY_ADD, async (_, { item }) => {
     try {
       const data = await historyService.add(item);
       return wrapSuccess(data);
@@ -2222,7 +2484,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.HISTORY_REMOVE, async (_, { id }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.HISTORY_REMOVE, async (_, { id }) => {
     try {
       const data = await historyService.remove(id);
       return wrapSuccess(data);
@@ -2230,7 +2492,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.HISTORY_CLEAR, async () => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.HISTORY_CLEAR, async () => {
     try {
       await historyService.clear();
       return wrapSuccess(void 0);
@@ -2238,7 +2500,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.FAVORITES_GET_ALL, async () => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.FAVORITES_GET_ALL, async () => {
     try {
       const data = await favoritesService.getAll();
       return wrapSuccess(data);
@@ -2246,7 +2508,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.FAVORITES_ADD, async (_, { item }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.FAVORITES_ADD, async (_, { item }) => {
     try {
       const data = await favoritesService.add(item);
       return wrapSuccess(data);
@@ -2254,7 +2516,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.FAVORITES_REMOVE, async (_, { id }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.FAVORITES_REMOVE, async (_, { id }) => {
     try {
       const data = await favoritesService.remove(id);
       return wrapSuccess(data);
@@ -2262,7 +2524,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.SCHEDULER_GET_ALL, async () => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.SCHEDULER_GET_ALL, async () => {
     try {
       const data = await schedulerService.getAll();
       return wrapSuccess(data);
@@ -2270,7 +2532,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.SCHEDULER_CREATE, async (_, { schedule }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.SCHEDULER_CREATE, async (_, { schedule }) => {
     try {
       const data = await schedulerService.create(schedule);
       return wrapSuccess(data);
@@ -2278,7 +2540,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.SCHEDULER_UPDATE, async (_, { schedule }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.SCHEDULER_UPDATE, async (_, { schedule }) => {
     try {
       const data = await schedulerService.update(schedule);
       return wrapSuccess(data);
@@ -2286,7 +2548,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.SCHEDULER_CANCEL, async (_, { id }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.SCHEDULER_CANCEL, async (_, { id }) => {
     try {
       const data = await schedulerService.cancel(id);
       return wrapSuccess(data);
@@ -2294,7 +2556,7 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.SCHEDULER_REMOVE, async (_, { id }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.SCHEDULER_REMOVE, async (_, { id }) => {
     try {
       const data = await schedulerService.remove(id);
       return wrapSuccess(data);
@@ -2302,9 +2564,15 @@ function registerIpcHandlers() {
       return wrapError(err);
     }
   });
-  import_electron3.ipcMain.handle(IPC_CHANNELS.SCHEDULER_TICK, async (_, { now }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.SCHEDULER_TICK, async (_, { now }) => {
     try {
       const data = await schedulerService.tick(now);
+      const settings = await settingsService.get();
+      notificationService = notificationService ?? new NativeNotificationService(settings);
+      notificationService.updateSettings(settings);
+      data.triggered.forEach(({ schedule, metadata }) => {
+        notificationService?.notifyScheduledDownload(schedule, metadata);
+      });
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -2314,9 +2582,9 @@ function registerIpcHandlers() {
 
 // electron/main.ts
 var mainWindow = null;
-var appIconPath = path3.resolve(__dirname, "../../icon.png");
+var appIconPath = path4.resolve(__dirname, "../../icon.png");
 function createWindow() {
-  mainWindow = new import_electron4.BrowserWindow({
+  mainWindow = new import_electron5.BrowserWindow({
     width: 1200,
     height: 600,
     minWidth: 900,
@@ -2326,7 +2594,7 @@ function createWindow() {
     autoHideMenuBar: true,
     titleBarStyle: "default",
     webPreferences: {
-      preload: path3.join(__dirname, "preload.cjs"),
+      preload: path4.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -2352,7 +2620,7 @@ function createWindow() {
     if (template.length === 0) {
       return;
     }
-    const menu = import_electron4.Menu.buildFromTemplate(template);
+    const menu = import_electron5.Menu.buildFromTemplate(template);
     menu.popup({ window: mainWindow });
   });
   registerIpcHandlers();
@@ -2360,13 +2628,8 @@ function createWindow() {
   if (devServerUrl) {
     void mainWindow.loadURL(devServerUrl);
   } else {
-    void mainWindow.loadFile(path3.join(__dirname, "../dist/index.html"));
+    void mainWindow.loadFile(path4.join(__dirname, "../dist/index.html"));
   }
-  mainWindow.on("minimize", () => {
-    if (mainWindow) {
-      minimizeToTray(mainWindow);
-    }
-  });
   mainWindow.on("close", (event) => {
     if (mainWindow) {
       event.preventDefault();
@@ -2378,13 +2641,13 @@ function createWindow() {
     mainWindow = null;
   });
 }
-import_electron4.app.whenReady().then(() => {
-  import_electron4.app.setAppUserModelId("com.remon.download");
+import_electron5.app.whenReady().then(() => {
+  import_electron5.app.setAppUserModelId("com.remon.download");
   createWindow();
   if (mainWindow) {
     createTray(mainWindow);
   }
-  import_electron4.app.on("activate", () => {
+  import_electron5.app.on("activate", () => {
     if (mainWindow === null) {
       createWindow();
       if (mainWindow) {
@@ -2395,12 +2658,12 @@ import_electron4.app.whenReady().then(() => {
     }
   });
 });
-import_electron4.app.on("window-all-closed", () => {
+import_electron5.app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     console.log("[Main] All windows closed, but app continues running (tray still active)");
   }
 });
-import_electron4.app.on("before-quit", () => {
+import_electron5.app.on("before-quit", () => {
   console.log("[Main] App is quitting, destroying tray...");
   destroyTray();
 });

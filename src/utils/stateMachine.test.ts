@@ -24,6 +24,7 @@ const allowedPairs: readonly [DownloadStatus, DownloadStatus][] = [
   ["converting", "canceled"],
   ["failed", "retrying"],
   ["retrying", "analyzing"],
+  ["retrying", "downloading"],
   ["canceled", "retrying"]
 ];
 

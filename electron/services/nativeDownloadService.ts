@@ -394,7 +394,7 @@ export class NativeDownloadService extends EventEmitter {
       // 3. File size is equal or very close to expected fileSize
       const isNearComplete = stat.size >= (item.fileSize * 0.9);
       const isEqual = stat.size >= item.fileSize * 0.99; // 99% to account for rounding
-      
+
       return item.progress >= 95 || isNearComplete || isEqual;
     } catch {
       return false;
@@ -406,6 +406,11 @@ export class NativeDownloadService extends EventEmitter {
     if (!currentItem) {
       return;
     }
+
+    this.updateItemStatus(id, "merging");
+    this.emitStateChange(id, "merging");
+    this.updateItemStatus(id, "converting");
+    this.emitStateChange(id, "converting");
 
     const finalFileSize = await this.resolveCompletedFileSize(outputPath, currentItem.fileSize);
     this.updateItemStatus(id, "completed", {
@@ -676,6 +681,11 @@ export class NativeDownloadService extends EventEmitter {
 
     // Handle process exit
     proc.on("exit", async (code) => {
+      if (activeDownload.isStopped) {
+        this.activeDownloads.delete(item.id);
+        return;
+      }
+
       if (!this.isCurrentProcess(item.id, generation)) {
         console.log(`[Download] Exit ignored: ${item.id} (stale generation)`);
         return;
@@ -798,7 +808,11 @@ export class NativeDownloadService extends EventEmitter {
       return { code: "network_error", message: "Network error - check your connection" };
     }
 
-    if (stderrLower.includes("ffmpeg error") || stderrLower.includes("postprocessor error")) {
+    if (
+      stderrLower.includes("ffmpeg error") ||
+      stderrLower.includes("ffmpeg failed") ||
+      stderrLower.includes("postprocessor error")
+    ) {
       return { code: "ffmpeg_error", message: "FFmpeg processing failed - check FFmpeg installation" };
     }
 
@@ -888,26 +902,26 @@ export class NativeDownloadService extends EventEmitter {
     const activeDownload = this.activeDownloads.get(id);
     if (activeDownload && activeDownload.process) {
       console.log(`[Download] ✓ Found active process for ${id}, marking as stopped...`);
-      
+
       // Mark as stopped FIRST to ignore any pending data
       activeDownload.isStopped = true;
-      
+
       const proc = activeDownload.process;
-      
+
       // Close streams to prevent further data
-      if (proc.stdout) {
+      if (proc.stdout && typeof proc.stdout.destroy === "function") {
         proc.stdout.destroy();
         console.log(`[Download] ✓ Closed stdout stream for ${id}`);
       }
-      if (proc.stderr) {
+      if (proc.stderr && typeof proc.stderr.destroy === "function") {
         proc.stderr.destroy();
         console.log(`[Download] ✓ Closed stderr stream for ${id}`);
       }
-      if (proc.stdin) {
+      if (proc.stdin && typeof proc.stdin.destroy === "function") {
         proc.stdin.destroy();
         console.log(`[Download] ✓ Closed stdin stream for ${id}`);
       }
-      
+
       // Then kill the process
       this.killProcessTree(proc);
       this.activeDownloads.delete(id);
@@ -1055,26 +1069,26 @@ export class NativeDownloadService extends EventEmitter {
     const activeDownload = this.activeDownloads.get(id);
     if (activeDownload && activeDownload.process) {
       console.log(`[Download] ✓ Found active process for ${id}, marking as stopped...`);
-      
+
       // Mark as stopped FIRST to ignore any pending data
       activeDownload.isStopped = true;
-      
+
       const proc = activeDownload.process;
-      
+
       // Close streams first to prevent any further data
-      if (proc.stdout) {
+      if (proc.stdout && typeof proc.stdout.destroy === "function") {
         proc.stdout.destroy();
         console.log(`[Download] ✓ Closed stdout stream for ${id}`);
       }
-      if (proc.stderr) {
+      if (proc.stderr && typeof proc.stderr.destroy === "function") {
         proc.stderr.destroy();
         console.log(`[Download] ✓ Closed stderr stream for ${id}`);
       }
-      if (proc.stdin) {
+      if (proc.stdin && typeof proc.stdin.destroy === "function") {
         proc.stdin.destroy();
         console.log(`[Download] ✓ Closed stdin stream for ${id}`);
       }
-      
+
       // Then kill the process
       this.killProcessTree(proc);
       this.activeDownloads.delete(id);
@@ -1214,8 +1228,14 @@ export class NativeDownloadService extends EventEmitter {
    */
   cleanup(): void {
     for (const [id, activeDownload] of this.activeDownloads.entries()) {
+      activeDownload.isStopped = true;
+      this.nextProcessGeneration(id);
       if (activeDownload.process) {
         activeDownload.process.kill();
+      }
+      const item = this.items.get(id);
+      if (item && ["downloading", "retrying", "merging", "converting"].includes(item.status)) {
+        this.updateItemStatus(id, "canceled", { speed: 0, eta: "--" });
       }
     }
     this.activeDownloads.clear();
