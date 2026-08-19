@@ -1963,11 +1963,11 @@ function wrapError(err) {
   };
   return { success: false, error: errorModel };
 }
-function registerIpcHandlers() {
+function registerIpcHandlers(options = {}) {
   const settingsService = new NativeSettingsService();
   const historyService = new NativeHistoryService();
   const favoritesService = new NativeFavoritesService();
-  const schedulerService = new NativeSchedulerService();
+  const schedulerService = options.schedulerService ?? new NativeSchedulerService();
   const initServices = async () => {
     try {
       await settingsService.initialize();
@@ -2001,6 +2001,7 @@ function registerIpcHandlers() {
     try {
       const settings = await settingsService.get();
       downloadService = new NativeDownloadService(settings);
+      globalThis.__remonDownloadService = downloadService;
       downloadServiceReady = true;
       downloadService.on("download:progress", (payload) => {
         const windows = import_electron3.BrowserWindow.getAllWindows();
@@ -2312,8 +2313,129 @@ function registerIpcHandlers() {
   });
 }
 
+// electron/schedulerBackground.ts
+var SchedulerBackgroundLoop = class {
+  schedulerService;
+  getDownloadService;
+  pollMs;
+  logger;
+  timer = null;
+  running = false;
+  tickInFlight = false;
+  activeExecutionIds = /* @__PURE__ */ new Set();
+  lastTriggeredBySchedule = /* @__PURE__ */ new Map();
+  constructor(options = {}) {
+    this.schedulerService = options.schedulerService ?? new NativeSchedulerService();
+    this.getDownloadService = options.getDownloadService ?? (() => null);
+    this.pollMs = options.pollMs ?? 1e3;
+    this.logger = options.logger ?? console;
+  }
+  start() {
+    if (this.running) {
+      return;
+    }
+    this.running = true;
+    this.lastTriggeredBySchedule.clear();
+    this.logger.log("[Main] scheduler started");
+    this.timer = setInterval(() => {
+      void this.tickOnce(Date.now());
+    }, this.pollMs);
+    void this.tickOnce(Date.now());
+  }
+  stop() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    this.running = false;
+    this.activeExecutionIds.clear();
+    this.lastTriggeredBySchedule.clear();
+    this.logger.log("[Main] scheduler stopped");
+  }
+  isRunning() {
+    return this.running;
+  }
+  hasActiveTimer() {
+    return this.timer !== null;
+  }
+  async tickOnce(now) {
+    if (this.tickInFlight) {
+      this.logger.log("[Main] tick skipped: scheduler already running");
+      return 0;
+    }
+    this.tickInFlight = true;
+    try {
+      this.logger.log(`[Main] scheduler tick ${new Date(now).toISOString()}`);
+      const result = await this.schedulerService.tick(now);
+      if (result.triggered.length === 0) {
+        return 0;
+      }
+      this.logger.log(`[Main] scheduled task detected: ${result.triggered.length} due task(s)`);
+      let startedCount = 0;
+      for (const triggered of result.triggered) {
+        const scheduleId = triggered.schedule.id;
+        const triggerKey = triggered.schedule.triggerCount;
+        if (this.activeExecutionIds.has(scheduleId) || this.lastTriggeredBySchedule.get(scheduleId) === triggerKey) {
+          this.logger.warn(`[Main] duplicate scheduled task detected and skipped: ${scheduleId}`);
+          continue;
+        }
+        this.activeExecutionIds.add(scheduleId);
+        this.lastTriggeredBySchedule.set(scheduleId, triggerKey);
+        try {
+          await this.executeTriggeredTask(triggered.schedule, triggered.metadata);
+          startedCount += 1;
+        } catch (error) {
+          this.logger.error(`[Main] scheduled download failed: ${scheduleId}`, error);
+        } finally {
+          this.activeExecutionIds.delete(scheduleId);
+        }
+      }
+      return startedCount;
+    } catch (error) {
+      this.logger.error("[Main] scheduler tick failed", error);
+      return 0;
+    } finally {
+      this.tickInFlight = false;
+    }
+  }
+  async executeTriggeredTask(schedule, metadata) {
+    const downloadService = this.getDownloadService();
+    if (!downloadService) {
+      this.logger.warn(`[Main] scheduler task skipped because download service is unavailable: ${schedule.id}`);
+      return;
+    }
+    const itemId = `${schedule.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const item = {
+      id: itemId,
+      metadataId: metadata.id,
+      thumbnail: metadata.thumbnail,
+      title: metadata.title,
+      sourceUrl: metadata.sourceUrl,
+      quality: "auto",
+      format: "mp4",
+      fileSize: metadata.fileSize,
+      downloadedSize: 0,
+      speed: 0,
+      eta: "--",
+      progress: 0,
+      status: "queued",
+      order: 0,
+      addedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      phaseStartedAt: Date.now(),
+      lastUpdatedAt: Date.now(),
+      retryCount: 0
+    };
+    this.logger.log(`[Main] scheduled download started: ${item.id} for ${schedule.id}`);
+    await downloadService.add(item);
+    await downloadService.start(item.id);
+    this.logger.log(`[Main] scheduled task completed: ${schedule.id}`);
+  }
+};
+
 // electron/main.ts
 var mainWindow = null;
+var sharedSchedulerService = new NativeSchedulerService();
+var schedulerLoop = null;
 var appIconPath = path3.resolve(__dirname, "../../icon.png");
 function createWindow() {
   mainWindow = new import_electron4.BrowserWindow({
@@ -2333,6 +2455,20 @@ function createWindow() {
       webSecurity: true
     }
   });
+  if (!schedulerLoop) {
+    const settingsService = new NativeSettingsService();
+    void settingsService.initialize();
+    void sharedSchedulerService.initialize();
+    schedulerLoop = new SchedulerBackgroundLoop({
+      schedulerService: sharedSchedulerService,
+      getDownloadService: () => {
+        const service = globalThis.__remonDownloadService;
+        return service ?? null;
+      },
+      logger: console
+    });
+    schedulerLoop.start();
+  }
   mainWindow.setMenuBarVisibility(false);
   mainWindow.setAutoHideMenuBar(true);
   mainWindow.webContents.on("context-menu", (_event, params) => {
@@ -2355,7 +2491,7 @@ function createWindow() {
     const menu = import_electron4.Menu.buildFromTemplate(template);
     menu.popup({ window: mainWindow });
   });
-  registerIpcHandlers();
+  registerIpcHandlers({ schedulerService: sharedSchedulerService });
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   if (devServerUrl) {
     void mainWindow.loadURL(devServerUrl);
@@ -2402,6 +2538,10 @@ import_electron4.app.on("window-all-closed", () => {
 });
 import_electron4.app.on("before-quit", () => {
   console.log("[Main] App is quitting, destroying tray...");
+  if (schedulerLoop) {
+    schedulerLoop.stop();
+    schedulerLoop = null;
+  }
   destroyTray();
 });
 //# sourceMappingURL=main.cjs.map

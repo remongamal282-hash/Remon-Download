@@ -80,11 +80,8 @@ export function SchedulerPage() {
   useEffect(() => {
     if (intervalRef.current !== null) {
       window.clearInterval(intervalRef.current);
+      intervalRef.current = null;
     }
-
-    intervalRef.current = window.setInterval(() => {
-      void tick();
-    }, 1000);
 
     return () => {
       if (intervalRef.current !== null) {
@@ -92,7 +89,7 @@ export function SchedulerPage() {
         intervalRef.current = null;
       }
     };
-  }, [tick]);
+  }, []);
 
   useEffect(() => {
     if (error) {

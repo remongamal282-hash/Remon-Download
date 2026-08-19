@@ -1214,10 +1214,24 @@ export class NativeDownloadService extends EventEmitter {
    */
   cleanup(): void {
     for (const [id, activeDownload] of this.activeDownloads.entries()) {
+      const item = this.items.get(id);
+
       if (activeDownload.process) {
         activeDownload.process.kill();
       }
+
+      if (item && ["downloading", "retrying", "merging", "converting"].includes(item.status)) {
+        this.items.set(id, {
+          ...item,
+          status: "canceled",
+          speed: 0,
+          eta: "--",
+          lastUpdatedAt: Date.now()
+        });
+      }
     }
+
     this.activeDownloads.clear();
+    this.processGenerations.clear();
   }
 }

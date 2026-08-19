@@ -23,11 +23,11 @@ function wrapError<T>(err: unknown): IpcResult<T> {
   return { success: false, error: errorModel };
 }
 
-export function registerIpcHandlers(): void {
+export function registerIpcHandlers(options: { schedulerService?: NativeSchedulerService } = {}): void {
   const settingsService = new NativeSettingsService();
   const historyService = new NativeHistoryService();
   const favoritesService = new NativeFavoritesService();
-  const schedulerService = new NativeSchedulerService();
+  const schedulerService = options.schedulerService ?? new NativeSchedulerService();
 
   // Initialize services with persistent storage
   const initServices = async () => {
@@ -71,6 +71,7 @@ export function registerIpcHandlers(): void {
     try {
       const settings = await settingsService.get();
       downloadService = new NativeDownloadService(settings);
+      (globalThis as any).__remonDownloadService = downloadService;
       downloadServiceReady = true;
 
       // Forward download progress events to Renderer
