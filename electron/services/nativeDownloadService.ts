@@ -1230,14 +1230,23 @@ export class NativeDownloadService extends EventEmitter {
     for (const [id, activeDownload] of this.activeDownloads.entries()) {
       activeDownload.isStopped = true;
       this.nextProcessGeneration(id);
+
       if (activeDownload.process) {
         activeDownload.process.kill();
       }
+
       const item = this.items.get(id);
+
       if (item && ["downloading", "retrying", "merging", "converting"].includes(item.status)) {
-        this.updateItemStatus(id, "canceled", { speed: 0, eta: "--" });
+        this.updateItemStatus(id, "canceled", {
+          speed: 0,
+          eta: "--"
+        });
+      }
       }
     }
+
     this.activeDownloads.clear();
+    this.processGenerations.clear();
   }
 }

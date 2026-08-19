@@ -1,9 +1,15 @@
 import { app, BrowserWindow, Menu } from "electron";
 import * as path from "path";
 import { registerIpcHandlers } from "./ipc/handlers";
-import { createTray, destroyTray, showWindow, hideWindow } from "./tray";
+import { createTray, destroyTray, showWindow, hideWindow, minimizeToTray } from "./tray";
+import { SchedulerBackgroundLoop } from "./schedulerBackground";
+import { NativeSchedulerService } from "./services/nativeSchedulerService";
+import { NativeSettingsService } from "./services/nativeSettingsService";
+import { NativeDownloadService } from "./services/nativeDownloadService";
 
 let mainWindow: BrowserWindow | null = null;
+const sharedSchedulerService = new NativeSchedulerService();
+let schedulerLoop: SchedulerBackgroundLoop | null = null;
 
 const appIconPath = path.resolve(__dirname, "../../icon.png");
 
@@ -26,6 +32,26 @@ function createWindow(): void {
     }
   });
 
+  if (!schedulerLoop) {
+    const settingsService = new NativeSettingsService();
+
+    void settingsService.initialize();
+    void sharedSchedulerService.initialize();
+
+    schedulerLoop = new SchedulerBackgroundLoop({
+      schedulerService: sharedSchedulerService,
+      getDownloadService: () => {
+        const service = (globalThis as any)
+          .__remonDownloadService as NativeDownloadService | undefined;
+
+        return service ?? null;
+      },
+      logger: console
+    });
+
+    schedulerLoop.start();
+  }
+
   mainWindow.setMenuBarVisibility(false);
   mainWindow.setAutoHideMenuBar(true);
 
@@ -37,17 +63,40 @@ function createWindow(): void {
     const template = [
       ...(params.isEditable
         ? [
-          { label: "Cut", role: "cut" as const, enabled: params.editFlags.canCut },
-          { label: "Copy", role: "copy" as const, enabled: params.editFlags.canCopy },
-          { label: "Paste", role: "paste" as const, enabled: params.editFlags.canPaste },
-          { label: "Select All", role: "selectAll" as const }
+          {
+            label: "Cut",
+            role: "cut" as const,
+            enabled: params.editFlags.canCut
+          },
+          {
+            label: "Copy",
+            role: "copy" as const,
+            enabled: params.editFlags.canCopy
+          },
+          {
+            label: "Paste",
+            role: "paste" as const,
+            enabled: params.editFlags.canPaste
+          },
+          {
+            label: "Select All",
+            role: "selectAll" as const
+          }
         ]
         : []),
+
       ...(!params.isEditable && params.selectionText
         ? [{ label: "Copy", role: "copy" as const }]
         : []),
+
       ...(!params.isEditable && !params.selectionText
-        ? [{ label: "Paste", role: "paste" as const, enabled: params.isEditable }]
+        ? [
+          {
+            label: "Paste",
+            role: "paste" as const,
+            enabled: params.isEditable
+          }
+        ]
         : [])
     ];
 
@@ -59,13 +108,18 @@ function createWindow(): void {
     menu.popup({ window: mainWindow });
   });
 
-  registerIpcHandlers();
+  registerIpcHandlers({
+    schedulerService: sharedSchedulerService
+  });
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+
   if (devServerUrl) {
     void mainWindow.loadURL(devServerUrl);
   } else {
-    void mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
+    void mainWindow.loadFile(
+      path.join(__dirname, "../dist/index.html")
+    );
   }
 
   // Handle close: hide to tray instead of closing
@@ -85,6 +139,7 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   app.setAppUserModelId("com.remon.download");
+
   createWindow();
 
   // Create system tray after window is created
@@ -95,6 +150,7 @@ app.whenReady().then(() => {
   app.on("activate", () => {
     if (mainWindow === null) {
       createWindow();
+
       if (mainWindow) {
         createTray(mainWindow);
       }
@@ -111,12 +167,20 @@ app.on("window-all-closed", () => {
   // because the tray is still active and the app is still working
   // Only quit when user explicitly selects Quit from the tray menu
   if (process.platform !== "darwin") {
-    console.log("[Main] All windows closed, but app continues running (tray still active)");
+    console.log(
+      "[Main] All windows closed, but app continues running (tray still active)"
+    );
   }
 });
 
 // Clean up tray before quitting
 app.on("before-quit", () => {
   console.log("[Main] App is quitting, destroying tray...");
+
+  if (schedulerLoop) {
+    schedulerLoop.stop();
+    schedulerLoop = null;
+  }
+
   destroyTray();
 });

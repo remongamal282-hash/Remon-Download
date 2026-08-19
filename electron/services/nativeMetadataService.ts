@@ -32,7 +32,14 @@
 
 import { spawn as nodeSpawn, type ChildProcess } from "child_process";
 import { access as fsAccess, constants as fsConstants } from "fs/promises";
-import type { AnalysisResult, ChannelMetadata, LinkType, PlaylistMetadata, VideoMetadata, VideoLinkType } from "../../src/types/download";
+import type {
+  AnalysisResult,
+  ChannelMetadata,
+  LinkType,
+  PlaylistMetadata,
+  VideoMetadata,
+  VideoLinkType
+} from "../../src/types/download";
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
@@ -207,11 +214,15 @@ function formatFileSize(size?: number): number {
   return size && size > 0 ? size : 0;
 }
 
-function extractThumbnail(raw: YtdlpRawVideo | YtdlpRawPlaylist): string {
+function extractThumbnail(
+  raw: YtdlpRawVideo | YtdlpRawPlaylist
+): string {
   if (raw.thumbnail) return raw.thumbnail;
+
   if (raw.thumbnails && raw.thumbnails.length > 0) {
     return raw.thumbnails[0]?.url ?? "";
   }
+
   return "";
 }
 
@@ -225,9 +236,13 @@ function parseVideoMetadata(
 
   // Extract available quality options
   const heights = new Set<number>();
+
   formats.forEach((f) => {
-    if (f.height && f.height > 0) heights.add(f.height);
+    if (f.height && f.height > 0) {
+      heights.add(f.height);
+    }
   });
+
   const qualityOptions = Array.from(heights)
     .sort((a, b) => b - a)
     .map((h) => `${h}p`);
@@ -238,17 +253,32 @@ function parseVideoMetadata(
       .filter((ext): ext is string => !!ext)
       .filter((ext) => ["mp4", "webm", "mkv"].includes(ext))
   );
+
   const audioFormats = new Set<string>(["mp3", "opus"]);
 
   // Best format info
-  const bestFormat = formats.find((f) => f.height && f.height > 0) ?? formats[0];
-  const resolution = bestFormat?.height ? `${bestFormat.height}p` : "1080p";
+  const bestFormat =
+    formats.find((f) => f.height && f.height > 0) ?? formats[0];
+
+  const resolution = bestFormat?.height
+    ? `${bestFormat.height}p`
+    : "1080p";
+
   const fps = bestFormat?.fps ?? 30;
   const videoCodec = bestFormat?.vcodec ?? "H.264";
   const audioCodec = bestFormat?.acodec ?? "AAC";
-  const videoBitrate = bestFormat?.tbr ? `${(bestFormat.tbr / 1000).toFixed(1)} Mbps` : "0 Mbps";
-  const audioBitrate = bestFormat?.abr ? `${Math.round(bestFormat.abr)} Kbps` : "0 Kbps";
-  const fileSize = formatFileSize(bestFormat?.filesize ?? bestFormat?.filesize_approx);
+
+  const videoBitrate = bestFormat?.tbr
+    ? `${(bestFormat.tbr / 1000).toFixed(1)} Mbps`
+    : "0 Mbps";
+
+  const audioBitrate = bestFormat?.abr
+    ? `${Math.round(bestFormat.abr)} Kbps`
+    : "0 Kbps";
+
+  const fileSize = formatFileSize(
+    bestFormat?.filesize ?? bestFormat?.filesize_approx
+  );
 
   return {
     id: `yt-${linkType}-${videoId}`,
@@ -259,7 +289,10 @@ function parseVideoMetadata(
     channelName: raw.uploader ?? raw.channel ?? "Unknown Channel",
     duration: formatDuration(raw.duration),
     views: raw.view_count ?? 0,
-    qualityOptions: qualityOptions.length > 0 ? qualityOptions : ["1080p", "720p", "480p"],
+    qualityOptions:
+      qualityOptions.length > 0
+        ? qualityOptions
+        : ["1080p", "720p", "480p"],
     videoFormats: Array.from(videoFormats).slice(0, 3), // Limit to 3
     audioFormats: Array.from(audioFormats),
     resolution,
@@ -270,18 +303,26 @@ function parseVideoMetadata(
     audioBitrate,
     container: bestFormat?.ext ?? "mp4",
     fileSize,
-    uploadDate: raw.upload_date ?? new Date().toISOString().split("T")[0] ?? ""
+    uploadDate:
+      raw.upload_date ??
+      new Date().toISOString().split("T")[0] ??
+      ""
   };
 }
 
-function parsePlaylistMetadata(raw: YtdlpRawPlaylist, url: string): PlaylistMetadata {
+function parsePlaylistMetadata(
+  raw: YtdlpRawPlaylist,
+  url: string
+): PlaylistMetadata {
   const playlistId = raw.id ?? "unknown-playlist";
   const entries = raw.entries ?? [];
 
   // Parse first 10 videos for playlist preview
-  const videos = entries.slice(0, 10).map((entry, index) =>
-    parseVideoMetadata(entry, "playlist-video", index + 1)
-  );
+  const videos = entries
+    .slice(0, 10)
+    .map((entry, index) =>
+      parseVideoMetadata(entry, "playlist-video", index + 1)
+    );
 
   return {
     id: `yt-playlist-${playlistId}`,
@@ -293,14 +334,19 @@ function parsePlaylistMetadata(raw: YtdlpRawPlaylist, url: string): PlaylistMeta
   };
 }
 
-function parseChannelMetadata(raw: YtdlpRawPlaylist, url: string): ChannelMetadata {
+function parseChannelMetadata(
+  raw: YtdlpRawPlaylist,
+  url: string
+): ChannelMetadata {
   const channelId = raw.id ?? "unknown-channel";
   const entries = raw.entries ?? [];
 
   // Parse first 4 videos as latest videos preview
-  const latestVideos = entries.slice(0, 4).map((entry, index) =>
-    parseVideoMetadata(entry, "video", index + 1)
-  );
+  const latestVideos = entries
+    .slice(0, 4)
+    .map((entry, index) =>
+      parseVideoMetadata(entry, "video", index + 1)
+    );
 
   return {
     id: `yt-channel-${channelId}`,
@@ -317,7 +363,10 @@ function parseChannelMetadata(raw: YtdlpRawPlaylist, url: string): ChannelMetada
 
 export class NativeMetadataService {
   private ytdlpPath: string | null = null;
-  private metadataCache = new MetadataCache<AnalysisResult>(100, 1000 * 60 * 60);
+  private metadataCache = new MetadataCache<AnalysisResult>(
+    100,
+    1000 * 60 * 60
+  );
   private executor: ProcessExecutor;
 
   constructor(
@@ -335,7 +384,11 @@ export class NativeMetadataService {
     // Priority 1: Settings-provided path
     if (this.settingsYtdlpPath && this.settingsYtdlpPath.trim()) {
       try {
-        await this.executor.checkAccess(this.settingsYtdlpPath, fsConstants.X_OK);
+        await this.executor.checkAccess(
+          this.settingsYtdlpPath,
+          fsConstants.X_OK
+        );
+
         return this.settingsYtdlpPath;
       } catch {
         // Invalid settings path - fall through to PATH
@@ -343,19 +396,34 @@ export class NativeMetadataService {
     }
 
     // Priority 2: System PATH (try common names)
-    const candidates = ["yt-dlp", "yt-dlp.exe", "youtube-dl", "youtube-dl.exe"];
+    const candidates = [
+      "yt-dlp",
+      "yt-dlp.exe",
+      "youtube-dl",
+      "youtube-dl.exe"
+    ];
 
     for (const candidate of candidates) {
       try {
         // Try spawning with --version to verify it exists and works
         await new Promise<void>((resolve, reject) => {
-          const proc = this.executor.spawn(candidate, ["--version"], { timeout: 5000 });
+          const proc = this.executor.spawn(
+            candidate,
+            ["--version"],
+            { timeout: 5000 }
+          );
+
           proc.on("error", reject);
+
           proc.on("exit", (code) => {
-            if (code === 0) resolve();
-            else reject(new Error(`Exit code ${code}`));
+            if (code === 0) {
+              resolve();
+            } else {
+              reject(new Error(`Exit code ${code}`));
+            }
           });
         });
+
         return candidate;
       } catch {
         // Try next candidate
@@ -369,22 +437,35 @@ export class NativeMetadataService {
    * Spawns yt-dlp process and returns parsed JSON output.
    * Optimized for speed with faster options.
    */
-  private async executeYtdlp(ytdlpPath: string, url: string, isPlaylist = false): Promise<YtdlpRawOutput> {
+  private async executeYtdlp(
+    ytdlpPath: string,
+    url: string,
+    isPlaylist = false
+  ): Promise<YtdlpRawOutput> {
     return new Promise((resolve, reject) => {
       const args = [
         "--dump-single-json",
         isPlaylist ? "--yes-playlist" : "--no-playlist",
-        ...(isPlaylist ? ["--flat-playlist", "--playlist-items", "1-5"] : []), // Only first 5 videos for fast preview
+        ...(isPlaylist
+          ? ["--flat-playlist", "--playlist-items", "1-5"]
+          : []), // Only first 5 videos for fast preview
         "--skip-download",
         "--no-warnings",
         url
       ];
 
-      const timeout = isPlaylist ? PLAYLIST_TIMEOUT_MS : YTDLP_TIMEOUT_MS;
-      const proc = this.executor.spawn(ytdlpPath, args, {
-        timeout,
-        windowsHide: true
-      });
+      const timeout = isPlaylist
+        ? PLAYLIST_TIMEOUT_MS
+        : YTDLP_TIMEOUT_MS;
+
+      const proc = this.executor.spawn(
+        ytdlpPath,
+        args,
+        {
+          timeout,
+          windowsHide: true
+        }
+      );
 
       let stdout = "";
       let stderr = "";
@@ -410,7 +491,10 @@ export class NativeMetadataService {
       proc.on("exit", (code) => {
         if (code === 0) {
           try {
-            const parsed = JSON.parse(stdout) as YtdlpRawOutput;
+            const parsed = JSON.parse(
+              stdout
+            ) as YtdlpRawOutput;
+
             resolve(parsed);
           } catch {
             reject(new Error("ytdlp_invalid_json"));
@@ -418,13 +502,25 @@ export class NativeMetadataService {
         } else {
           // Map common yt-dlp error messages
           const stderrLower = stderr.toLowerCase();
-          if (stderrLower.includes("private video") || stderrLower.includes("members-only")) {
+
+          if (
+            stderrLower.includes("private video") ||
+            stderrLower.includes("members-only")
+          ) {
             reject(new Error("video_private"));
-          } else if (stderrLower.includes("video unavailable") || stderrLower.includes("not available")) {
+          } else if (
+            stderrLower.includes("video unavailable") ||
+            stderrLower.includes("not available")
+          ) {
             reject(new Error("video_unavailable"));
-          } else if (stderrLower.includes("unsupported url")) {
+          } else if (
+            stderrLower.includes("unsupported url")
+          ) {
             reject(new Error("unsupported_url"));
-          } else if (stderrLower.includes("network") || stderrLower.includes("connection")) {
+          } else if (
+            stderrLower.includes("network") ||
+            stderrLower.includes("connection")
+          ) {
             reject(new Error("network_error"));
           } else {
             reject(new Error("ytdlp_failed"));
@@ -444,6 +540,7 @@ export class NativeMetadataService {
     }
 
     const trimmedUrl = url.trim();
+
     if (!trimmedUrl) {
       throw new Error("invalid_url");
     }
@@ -462,8 +559,12 @@ export class NativeMetadataService {
 
     // 🚀 Check cache first for instant results
     const cachedResult = this.metadataCache.get(trimmedUrl);
+
     if (cachedResult) {
-      console.log(`[MetadataService] Cache hit for ${trimmedUrl}`);
+      console.log(
+        `[MetadataService] Cache hit for ${trimmedUrl}`
+      );
+
       return cachedResult;
     }
 
@@ -479,22 +580,44 @@ export class NativeMetadataService {
 
     // Handle different link types
     if (linkType === "playlist" || linkType === "channel") {
-      const raw = await this.executeYtdlp(this.ytdlpPath, trimmedUrl, true);
+      const raw = await this.executeYtdlp(
+        this.ytdlpPath,
+        trimmedUrl,
+        true
+      );
 
       if (linkType === "playlist") {
-        result = parsePlaylistMetadata(raw as YtdlpRawPlaylist, trimmedUrl);
+        result = parsePlaylistMetadata(
+          raw as YtdlpRawPlaylist,
+          trimmedUrl
+        );
       } else {
-        result = parseChannelMetadata(raw as YtdlpRawPlaylist, trimmedUrl);
+        result = parseChannelMetadata(
+          raw as YtdlpRawPlaylist,
+          trimmedUrl
+        );
       }
     } else {
       // video | shorts | playlist-video
-      const raw = await this.executeYtdlp(this.ytdlpPath, trimmedUrl, false);
-      result = parseVideoMetadata(raw as YtdlpRawVideo, linkType, 1);
+      const raw = await this.executeYtdlp(
+        this.ytdlpPath,
+        trimmedUrl,
+        false
+      );
+
+      result = parseVideoMetadata(
+        raw as YtdlpRawVideo,
+        linkType,
+        1
+      );
     }
 
     // 💾 Cache the result for future requests (shared cache)
     this.metadataCache.set(trimmedUrl, result);
-    console.log(`[MetadataService] Cached metadata for ${trimmedUrl}`);
+
+    console.log(
+      `[MetadataService] Cached metadata for ${trimmedUrl}`
+    );
 
     return result;
   }
