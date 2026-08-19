@@ -151,6 +151,12 @@ export class ElectronDownloadService implements DownloadService {
     }
   }
 
+  async getAll(): Promise<DownloadItem[]> {
+    const items = await window.electronAPI!.download.getAll();
+    items.forEach((item) => this.itemsCache.set(item.id, item));
+    return items;
+  }
+
   /**
    * Cleanup event listeners
    */

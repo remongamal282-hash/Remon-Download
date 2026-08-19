@@ -1,10 +1,13 @@
 import type { DownloadItem, ScheduledDownload, VideoMetadata } from "../src/types/download";
 import { NativeDownloadService } from "./services/nativeDownloadService";
 import { NativeSchedulerService } from "./services/nativeSchedulerService";
+import { NativeNotificationService } from "./services/nativeNotificationService";
+import type { DownloadStateChangePayload } from "./ipc/channels";
 
 export interface SchedulerBackgroundLoopOptions {
   schedulerService?: NativeSchedulerService;
   getDownloadService?: () => NativeDownloadService | null;
+  getNotificationService?: () => NativeNotificationService | null;
   pollMs?: number;
   logger?: Pick<Console, "log" | "warn" | "error">;
 }
@@ -13,16 +16,20 @@ export class SchedulerBackgroundLoop {
   private readonly schedulerService: NativeSchedulerService;
   private readonly getDownloadService: () => NativeDownloadService | null;
   private readonly pollMs: number;
+  private readonly getNotificationService: () => NativeNotificationService | null;
   private readonly logger: Pick<Console, "log" | "warn" | "error">;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private tickInFlight = false;
   private activeExecutionIds = new Set<string>();
   private lastTriggeredBySchedule = new Map<string, number>();
+  private scheduledDownloadIds = new Map<string, { schedule: ScheduledDownload; item: DownloadItem }>();
+  private downloadListenerAttached = false;
 
   constructor(options: SchedulerBackgroundLoopOptions = {}) {
     this.schedulerService = options.schedulerService ?? new NativeSchedulerService();
     this.getDownloadService = options.getDownloadService ?? (() => null);
+    this.getNotificationService = options.getNotificationService ?? (() => null);
     this.pollMs = options.pollMs ?? 1000;
     this.logger = options.logger ?? console;
   }
@@ -34,6 +41,7 @@ export class SchedulerBackgroundLoop {
 
     this.running = true;
     this.lastTriggeredBySchedule.clear();
+    this.scheduledDownloadIds.clear();
     this.logger.log("[Main] scheduler started");
 
     this.timer = setInterval(() => {
@@ -52,6 +60,7 @@ export class SchedulerBackgroundLoop {
     this.running = false;
     this.activeExecutionIds.clear();
     this.lastTriggeredBySchedule.clear();
+    this.scheduledDownloadIds.clear();
     this.logger.log("[Main] scheduler stopped");
   }
 
@@ -120,6 +129,8 @@ export class SchedulerBackgroundLoop {
       return;
     }
 
+    this.attachDownloadListener(downloadService);
+
     const itemId = `${schedule.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const item: DownloadItem = {
       id: itemId,
@@ -145,8 +156,43 @@ export class SchedulerBackgroundLoop {
     this.logger.log(`[Main] scheduled download started: ${item.id} for ${schedule.id}`);
 
     await downloadService.add(item);
+    this.scheduledDownloadIds.set(item.id, { schedule, item });
+    this.getNotificationService()?.notifyScheduledDownload(schedule, metadata);
     await downloadService.start(item.id);
 
     this.logger.log(`[Main] scheduled task completed: ${schedule.id}`);
+  }
+
+  private attachDownloadListener(downloadService: NativeDownloadService): void {
+    if (this.downloadListenerAttached || typeof downloadService.on !== "function") {
+      return;
+    }
+
+    downloadService.on("download:state-change", (payload: DownloadStateChangePayload) => {
+      const trackedDownload = this.scheduledDownloadIds.get(payload.id);
+      if (!trackedDownload || !["completed", "failed"].includes(payload.status)) {
+        return;
+      }
+
+      this.scheduledDownloadIds.delete(payload.id);
+      const updatedItem = {
+        ...trackedDownload.item,
+        status: payload.status,
+        progress: payload.progress,
+        downloadedSize: payload.downloadedSize,
+        errorCode: payload.errorCode,
+        errorMessage: payload.errorMessage,
+        lastUpdatedAt: Date.now()
+      } as DownloadItem;
+      this.getNotificationService()?.handleDownloadStateChange(payload, updatedItem);
+      void this.schedulerService.update({
+        ...trackedDownload.schedule,
+        status: payload.status === "completed" ? "completed" : "failed",
+        errorMessage: payload.errorMessage,
+        updatedAt: new Date().toISOString()
+      });
+    });
+
+    this.downloadListenerAttached = true;
   }
 }

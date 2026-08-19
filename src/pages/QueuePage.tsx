@@ -42,6 +42,7 @@ const statusTone: Record<DownloadStatus, string> = {
 export function QueuePage() {
   const { t } = useTranslation();
   const items = useQueueStore((state) => state.items);
+  const load = useQueueStore((state) => state.load);
   const tick = useQueueStore((state) => state.tick);
   const reorder = useQueueStore((state) => state.reorder);
   const lastError = useQueueStore((state) => state.lastError);
@@ -56,6 +57,10 @@ export function QueuePage() {
     useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {

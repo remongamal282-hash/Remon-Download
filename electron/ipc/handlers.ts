@@ -10,6 +10,12 @@ import { NativeNotificationService } from "../services/nativeNotificationService
 import { hideWindow } from "../tray";
 import type { ErrorModel } from "../../src/types/errors";
 
+interface RegisterIpcHandlersOptions {
+  schedulerService?: NativeSchedulerService;
+  onDownloadServiceReady?: (service: NativeDownloadService) => void;
+  onNotificationServiceReady?: (service: NativeNotificationService) => void;
+}
+
 function wrapSuccess<T>(data: T): IpcResult<T> {
   return { success: true, data };
 }
@@ -24,11 +30,11 @@ function wrapError<T>(err: unknown): IpcResult<T> {
   return { success: false, error: errorModel };
 }
 
-export function registerIpcHandlers(): void {
+export function registerIpcHandlers(options: RegisterIpcHandlersOptions = {}): void {
   const settingsService = new NativeSettingsService();
   const historyService = new NativeHistoryService();
   const favoritesService = new NativeFavoritesService();
-  const schedulerService = new NativeSchedulerService();
+  const schedulerService = options.schedulerService ?? new NativeSchedulerService();
   let notificationService: NativeNotificationService | null = null;
 
   // Initialize services with persistent storage
@@ -111,7 +117,9 @@ export function registerIpcHandlers(): void {
     try {
       const settings = await settingsService.get();
       downloadService = new NativeDownloadService(settings);
+      options.onDownloadServiceReady?.(downloadService);
       notificationService = notificationService ?? new NativeNotificationService(settings);
+      options.onNotificationServiceReady?.(notificationService);
       downloadServiceReady = true;
 
       // Forward download progress events to Renderer
@@ -149,7 +157,17 @@ export function registerIpcHandlers(): void {
         if (item) {
           notificationService?.handleDownloadStateChange(payload, item);
         } else {
-          console.warn(`[IPC] Download notification skipped; item not cached: ${payload.id}`);
+          void downloadService?.getAll().then((items) => {
+            const uncachedItem = items.find((downloadItem) => downloadItem.id === payload.id);
+            if (uncachedItem) {
+              notificationService?.handleDownloadStateChange(payload, uncachedItem);
+              return;
+            }
+
+            console.warn(`[IPC] Download notification skipped; item not found: ${payload.id}`);
+          }).catch((error) => {
+            console.error(`[IPC] Failed to load download for notification: ${payload.id}`, error);
+          });
         }
       });
     } catch (err) {

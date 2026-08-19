@@ -8,6 +8,7 @@ import { mapMockError } from "../utils/errors";
 interface QueueState {
   items: DownloadItem[];
   lastError: ErrorModel | null;
+  load: () => Promise<void>;
   addFromMetadata: (metadata: VideoMetadata, quality: string, format: string) => DownloadItem;
   addManyFromMetadata: (metadata: VideoMetadata[], quality: string, format: string) => DownloadItem[];
   addFromHistoryItem: (item: HistoryItem) => DownloadItem;
@@ -89,6 +90,15 @@ export const useQueueStore = create<QueueState>((set, get) => {
   return {
     items: [],
     lastError: null,
+    load: async () => {
+      const service = resolveDownloadService();
+      if (!service.getAll) {
+        return;
+      }
+
+      const items = await service.getAll();
+      set({ items: normalizeOrder(items), lastError: null });
+    },
     addFromMetadata: (metadata, quality, format) => {
       const order = get().items.length + 1;
       const item = resolveDownloadService().createFromMetadata(metadata, order, quality, format);

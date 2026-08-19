@@ -1,4 +1,4 @@
-import { CalendarClock, Plus, Trash2, XCircle } from "lucide-react";
+import { AlertCircle, CalendarClock, CheckCircle2, Download, Plus, Trash2, XCircle } from "lucide-react";
 import { useEffect, useRef } from "react";
 import type { ReactNode } from "react";
 import { useForm } from "react-hook-form";
@@ -18,6 +18,14 @@ const statusTone: Record<ScheduledDownloadStatus, string> = {
   completed: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200",
   failed: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-200",
   canceled: "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+};
+
+const statusIcon: Record<ScheduledDownloadStatus, ReactNode> = {
+  scheduled: <CalendarClock size={14} aria-hidden="true" />,
+  triggered: <Download size={14} aria-hidden="true" />,
+  completed: <CheckCircle2 size={14} aria-hidden="true" />,
+  failed: <AlertCircle size={14} aria-hidden="true" />,
+  canceled: <XCircle size={14} aria-hidden="true" />
 };
 
 function todayInputValue(): string {
@@ -78,10 +86,9 @@ export function SchedulerPage() {
   const intervalRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (intervalRef.current !== null) {
-      window.clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
+    intervalRef.current = window.setInterval(() => {
+      void load();
+    }, 1000);
 
     return () => {
       if (intervalRef.current !== null) {
@@ -89,7 +96,7 @@ export function SchedulerPage() {
         intervalRef.current = null;
       }
     };
-  }, []);
+  }, [load]);
 
   useEffect(() => {
     if (error) {
@@ -266,7 +273,8 @@ function SchedulerRow({ item }: { item: ScheduledDownload }) {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="truncate text-base font-semibold">{item.sourceUrl}</h2>
-            <span className={`rounded-full px-2 py-1 text-xs font-semibold ${statusTone[item.status]}`}>
+            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${statusTone[item.status]}`}>
+              {statusIcon[item.status]}
               {t(`scheduler.status.${item.status}`)}
             </span>
           </div>
@@ -278,8 +286,8 @@ function SchedulerRow({ item }: { item: ScheduledDownload }) {
               {t("scheduler.lastTriggered")}:{" "}
               {item.lastTriggeredAt
                 ? new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: "short" }).format(
-                    new Date(item.lastTriggeredAt)
-                  )
+                  new Date(item.lastTriggeredAt)
+                )
                 : t("scheduler.never")}
             </span>
           </div>

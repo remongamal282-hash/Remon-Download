@@ -43,7 +43,7 @@ export const useSchedulerStore = create<SchedulerState>((set, get) => ({
   error: null,
   lastTriggeredId: null,
   load: async () => {
-    set({ isLoading: true, error: null });
+    set((state) => ({ isLoading: state.items.length === 0, error: null }));
 
     try {
       const items = await resolveSchedulerService().getAll();

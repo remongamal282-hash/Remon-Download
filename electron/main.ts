@@ -6,9 +6,12 @@ import { SchedulerBackgroundLoop } from "./schedulerBackground";
 import { NativeSchedulerService } from "./services/nativeSchedulerService";
 import { NativeSettingsService } from "./services/nativeSettingsService";
 import { NativeDownloadService } from "./services/nativeDownloadService";
+import { NativeNotificationService } from "./services/nativeNotificationService";
 
 let mainWindow: BrowserWindow | null = null;
 const sharedSchedulerService = new NativeSchedulerService();
+let nativeDownloadService: NativeDownloadService | null = null;
+let nativeNotificationService: NativeNotificationService | null = null;
 let schedulerLoop: SchedulerBackgroundLoop | null = null;
 
 const appIconPath = path.resolve(__dirname, "../../icon.png");
@@ -40,12 +43,8 @@ function createWindow(): void {
 
     schedulerLoop = new SchedulerBackgroundLoop({
       schedulerService: sharedSchedulerService,
-      getDownloadService: () => {
-        const service = (globalThis as any)
-          .__remonDownloadService as NativeDownloadService | undefined;
-
-        return service ?? null;
-      },
+      getDownloadService: () => nativeDownloadService,
+      getNotificationService: () => nativeNotificationService,
       logger: console
     });
 
@@ -109,7 +108,13 @@ function createWindow(): void {
   });
 
   registerIpcHandlers({
-    schedulerService: sharedSchedulerService
+    schedulerService: sharedSchedulerService,
+    onDownloadServiceReady: (service) => {
+      nativeDownloadService = service;
+    },
+    onNotificationServiceReady: (service) => {
+      nativeNotificationService = service;
+    }
   });
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
