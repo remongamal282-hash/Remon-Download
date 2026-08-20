@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu } from "electron";
+import { app, BrowserWindow, Menu, globalShortcut } from "electron";
 import * as path from "path";
 import { registerIpcHandlers } from "./ipc/handlers";
 import { createTray, destroyTray, showWindow, hideWindow, hasTray } from "./tray";
@@ -15,6 +15,35 @@ let nativeNotificationService: NativeNotificationService | null = null;
 let schedulerLoop: SchedulerBackgroundLoop | null = null;
 let minimizeToTrayEnabled = false;
 const settingsService = new NativeSettingsService();
+
+function ensureTray(window: BrowserWindow | null): boolean {
+  if (!window) {
+    return false;
+  }
+
+  if (hasTray()) {
+    return true;
+  }
+
+  try {
+    createTray(window);
+    return true;
+  } catch (error) {
+    console.error("[Main] Could not create system tray:", error);
+    return false;
+  }
+}
+
+function hideToTray(window: BrowserWindow | null, event?: { preventDefault?: () => void }): boolean {
+  if (!window || !ensureTray(window)) {
+    console.error("[Main] Tray is unavailable; keeping the window visible");
+    return false;
+  }
+
+  event?.preventDefault?.();
+  hideWindow(window);
+  return true;
+}
 
 const appIconPath = process.resourcesPath && process.defaultApp !== true
   ? path.join(process.resourcesPath, "app.asar", "icon.png")
@@ -127,12 +156,26 @@ function createWindow(): void {
     },
     onMinimizeToTrayChanged: (enabled, window) => {
       minimizeToTrayEnabled = enabled;
-      if (enabled && !hasTray()) {
-        createTray(window);
-      } else if (!enabled && hasTray()) {
-        destroyTray();
+      const targetWindow = window ?? mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null;
+
+      if (enabled) {
+        ensureTray(targetWindow);
       }
     }
+  });
+
+  app.on("browser-window-created", (_, createdWindow) => {
+    createdWindow.on("minimize", (event) => {
+      if (minimizeToTrayEnabled) {
+        if (hideToTray(createdWindow, event)) {
+          console.log("[Main] Window minimize intercepted, hiding to tray");
+        }
+      }
+    });
+
+    createdWindow.on("restore", () => {
+      createdWindow.setSkipTaskbar(false);
+    });
   });
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
@@ -147,11 +190,15 @@ function createWindow(): void {
 
   mainWindow.on("minimize", (event) => {
     if (mainWindow && minimizeToTrayEnabled) {
-      if (typeof event.preventDefault === "function") {
-        event.preventDefault();
+      if (hideToTray(mainWindow, event)) {
+        console.log("[Main] Window minimize intercepted, hiding to tray");
       }
-      hideWindow(mainWindow);
-      console.log("[Main] Window minimize intercepted, hiding to tray");
+    }
+  });
+
+  mainWindow.on("restore", () => {
+    if (mainWindow) {
+      mainWindow.setSkipTaskbar(false);
     }
   });
 
@@ -159,9 +206,9 @@ function createWindow(): void {
   // This prevents the entire application from closing when user clicks X
   mainWindow.on("close", (event) => {
     if (mainWindow && minimizeToTrayEnabled) {
-      event.preventDefault();
-      hideWindow(mainWindow);
-      console.log("[Main] Window close intercepted, hiding to tray");
+      if (hideToTray(mainWindow, event)) {
+        console.log("[Main] Window close intercepted, hiding to tray");
+      }
     }
   });
 
@@ -177,9 +224,9 @@ app.whenReady().then(async () => {
 
   createWindow();
 
-  // Create system tray after window is created
-  if (mainWindow && minimizeToTrayEnabled) {
-    createTray(mainWindow);
+  // Keep the tray entry available so a hidden window can always be restored.
+  if (mainWindow) {
+    ensureTray(mainWindow);
   }
 
   app.on("activate", () => {
@@ -187,10 +234,16 @@ app.whenReady().then(async () => {
       createWindow();
 
       if (mainWindow) {
-        createTray(mainWindow);
+        ensureTray(mainWindow);
       }
     } else {
       // If mainWindow exists but is hidden, show it
+      showWindow(mainWindow);
+    }
+  });
+
+  globalShortcut.register("CommandOrControl+Shift+R", () => {
+    if (mainWindow) {
       showWindow(mainWindow);
     }
   });
@@ -217,4 +270,5 @@ app.on("before-quit", () => {
   }
 
   destroyTray();
+  globalShortcut.unregister("CommandOrControl+Shift+R");
 });

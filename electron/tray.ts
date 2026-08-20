@@ -10,18 +10,29 @@
 
 import { Tray, Menu, BrowserWindow, app, nativeImage } from "electron";
 import * as path from "path";
+import * as fs from "fs";
 
 let tray: Tray | null = null;
 
-const getIconPath = (): string => {
-  if (process.resourcesPath && process.defaultApp !== true) {
-    return path.join(process.resourcesPath, "app.asar", "icon.png");
+function setSkipTaskbar(mainWindow: BrowserWindow, skip: boolean): void {
+  if (typeof mainWindow.setSkipTaskbar === "function") {
+    mainWindow.setSkipTaskbar(skip);
   }
+}
 
-  const applicationPath = typeof app.getAppPath === "function"
-    ? app.getAppPath()
-    : path.resolve(__dirname, "../..");
-  return path.join(applicationPath, "icon.png");
+const getIconPath = (): string => {
+  const candidates = process.resourcesPath && process.defaultApp !== true
+    ? [
+      path.join(process.resourcesPath, "app.asar", "icon.ico"),
+      path.join(process.resourcesPath, "app.asar", "icon.png")
+    ]
+    : [
+      path.join(typeof app.getAppPath === "function" ? app.getAppPath() : path.resolve(__dirname, "../.."), "icon.ico"),
+      path.join(typeof app.getAppPath === "function" ? app.getAppPath() : path.resolve(__dirname, "../.."), "icon.png")
+    ];
+
+  const iconPath = candidates.find((candidate) => fs.existsSync(candidate));
+  return iconPath ?? candidates[0];
 };
 
 /**
@@ -36,11 +47,22 @@ export function createTray(mainWindow: BrowserWindow): Tray {
 
   try {
     const iconPath = getIconPath();
-    const icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+    console.log(`[Tray] Loading icon from: ${iconPath}`);
+    if (!fs.existsSync(iconPath)) {
+      throw new Error(`Tray icon file does not exist: ${iconPath}`);
+    }
+
+    const sourceIcon = nativeImage.createFromPath(iconPath);
+    if (sourceIcon.isEmpty()) {
+      throw new Error(`Tray icon could not be decoded: ${iconPath}`);
+    }
+
+    const icon = sourceIcon.resize({ width: 32, height: 32 });
     if (icon.isEmpty()) {
       throw new Error(`Tray icon could not be loaded: ${iconPath}`);
     }
     tray = new Tray(icon);
+    console.log(`[Tray] Icon ready: ${icon.getSize().width}x${icon.getSize().height}`);
 
     // Set the tooltip
     tray.setToolTip("Remon Download");
@@ -100,6 +122,7 @@ export function showWindow(mainWindow: BrowserWindow | null): void {
     mainWindow.restore();
   }
 
+  setSkipTaskbar(mainWindow, false);
   mainWindow.show();
   mainWindow.focus();
 
@@ -116,6 +139,7 @@ export function hideWindow(mainWindow: BrowserWindow | null): void {
     return;
   }
 
+  setSkipTaskbar(mainWindow, true);
   mainWindow.hide();
   console.log("[Tray] Window hidden");
 }

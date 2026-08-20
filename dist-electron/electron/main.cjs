@@ -144,13 +144,14 @@ function classifyYouTubeUrl(url) {
 }
 function bundledYtdlpCandidates() {
   const candidates = [];
+  const projectRuntime = path.resolve(process.cwd(), "runtime", "yt-dlp.exe");
+  const repoRuntime = path.resolve(__dirname, "../../runtime/yt-dlp.exe");
   if (process.resourcesPath) {
     candidates.push(path.join(process.resourcesPath, "runtime", "yt-dlp.exe"));
   }
-  if (process.defaultApp === true) {
-    candidates.push(path.resolve(__dirname, "../../runtime/yt-dlp.exe"));
-  }
-  return candidates;
+  candidates.push(projectRuntime);
+  candidates.push(repoRuntime);
+  return Array.from(new Set(candidates.filter(Boolean)));
 }
 function formatDuration(seconds) {
   if (!seconds || seconds <= 0) return "0:00";
@@ -316,12 +317,14 @@ var NativeMetadataService = class {
    * Spawns yt-dlp process and returns parsed JSON output.
    * Optimized for speed with faster options.
    */
-  async executeYtdlp(ytdlpPath, url, isPlaylist = false) {
+  async executeYtdlp(ytdlpPath, url, isPlaylist = false, extractorArg = "youtube:player_client=android") {
     return new Promise((resolve5, reject) => {
       const args = [
         "--dump-single-json",
         isPlaylist ? "--yes-playlist" : "--no-playlist",
         ...isPlaylist ? ["--flat-playlist"] : [],
+        "--extractor-args",
+        extractorArg,
         "--skip-download",
         "--no-warnings",
         url
@@ -379,6 +382,40 @@ var NativeMetadataService = class {
       });
     });
   }
+  isRetryableYtdlpFailure(error) {
+    const message = String(error).toLowerCase();
+    return [
+      "video unavailable",
+      "not available",
+      "private video",
+      "members-only",
+      "network",
+      "connection",
+      "ytdlp_failed",
+      "ytdlp_timeout",
+      "unsupported_url"
+    ].some((token) => message.includes(token));
+  }
+  async executeYtdlpWithFallback(ytdlpPath, url, isPlaylist = false) {
+    const extractorArgCandidates = [
+      "youtube:player_client=android",
+      "youtube:player_client=web",
+      "youtube:player_client=ios",
+      "youtube:player_client=tv_embedded"
+    ];
+    let lastError = null;
+    for (const extractorArg of extractorArgCandidates) {
+      try {
+        return await this.executeYtdlp(ytdlpPath, url, isPlaylist, extractorArg);
+      } catch (error) {
+        lastError = error;
+        if (!this.isRetryableYtdlpFailure(error)) {
+          throw error;
+        }
+      }
+    }
+    throw lastError ?? new Error("ytdlp_failed");
+  }
   /**
    * Analyzes a YouTube URL using yt-dlp and returns typed AnalysisResult.
    */
@@ -411,7 +448,7 @@ var NativeMetadataService = class {
     const linkType = classifyYouTubeUrl(trimmedUrl);
     let result;
     if (linkType === "playlist" || linkType === "channel") {
-      const raw = await this.executeYtdlp(
+      const raw = await this.executeYtdlpWithFallback(
         this.ytdlpPath,
         trimmedUrl,
         true
@@ -428,7 +465,7 @@ var NativeMetadataService = class {
         );
       }
     } else {
-      const raw = await this.executeYtdlp(
+      const raw = await this.executeYtdlpWithFallback(
         this.ytdlpPath,
         trimmedUrl,
         false
@@ -2948,13 +2985,23 @@ var NativeNotificationService = class {
 // electron/tray.ts
 var import_electron3 = require("electron");
 var path4 = __toESM(require("path"), 1);
+var fs4 = __toESM(require("fs"), 1);
 var tray = null;
-var getIconPath = () => {
-  if (process.resourcesPath && process.defaultApp !== true) {
-    return path4.join(process.resourcesPath, "app.asar", "icon.png");
+function setSkipTaskbar(mainWindow2, skip) {
+  if (typeof mainWindow2.setSkipTaskbar === "function") {
+    mainWindow2.setSkipTaskbar(skip);
   }
-  const applicationPath = typeof import_electron3.app.getAppPath === "function" ? import_electron3.app.getAppPath() : path4.resolve(__dirname, "../..");
-  return path4.join(applicationPath, "icon.png");
+}
+var getIconPath = () => {
+  const candidates = process.resourcesPath && process.defaultApp !== true ? [
+    path4.join(process.resourcesPath, "app.asar", "icon.ico"),
+    path4.join(process.resourcesPath, "app.asar", "icon.png")
+  ] : [
+    path4.join(typeof import_electron3.app.getAppPath === "function" ? import_electron3.app.getAppPath() : path4.resolve(__dirname, "../.."), "icon.ico"),
+    path4.join(typeof import_electron3.app.getAppPath === "function" ? import_electron3.app.getAppPath() : path4.resolve(__dirname, "../.."), "icon.png")
+  ];
+  const iconPath = candidates.find((candidate) => fs4.existsSync(candidate));
+  return iconPath ?? candidates[0];
 };
 function createTray(mainWindow2) {
   if (tray) {
@@ -2963,11 +3010,20 @@ function createTray(mainWindow2) {
   }
   try {
     const iconPath = getIconPath();
-    const icon = import_electron3.nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+    console.log(`[Tray] Loading icon from: ${iconPath}`);
+    if (!fs4.existsSync(iconPath)) {
+      throw new Error(`Tray icon file does not exist: ${iconPath}`);
+    }
+    const sourceIcon = import_electron3.nativeImage.createFromPath(iconPath);
+    if (sourceIcon.isEmpty()) {
+      throw new Error(`Tray icon could not be decoded: ${iconPath}`);
+    }
+    const icon = sourceIcon.resize({ width: 32, height: 32 });
     if (icon.isEmpty()) {
       throw new Error(`Tray icon could not be loaded: ${iconPath}`);
     }
     tray = new import_electron3.Tray(icon);
+    console.log(`[Tray] Icon ready: ${icon.getSize().width}x${icon.getSize().height}`);
     tray.setToolTip("Remon Download");
     const contextMenu = import_electron3.Menu.buildFromTemplate([
       {
@@ -3011,6 +3067,7 @@ function showWindow(mainWindow2) {
   if (mainWindow2.isMinimized()) {
     mainWindow2.restore();
   }
+  setSkipTaskbar(mainWindow2, false);
   mainWindow2.show();
   mainWindow2.focus();
   console.log("[Tray] Window shown and focused");
@@ -3020,6 +3077,7 @@ function hideWindow(mainWindow2) {
     console.warn("[Tray] mainWindow is null, cannot hide");
     return;
   }
+  setSkipTaskbar(mainWindow2, true);
   mainWindow2.hide();
   console.log("[Tray] Window hidden");
 }
@@ -3682,6 +3740,30 @@ var nativeNotificationService = null;
 var schedulerLoop = null;
 var minimizeToTrayEnabled = false;
 var settingsService = new NativeSettingsService();
+function ensureTray(window) {
+  if (!window) {
+    return false;
+  }
+  if (hasTray()) {
+    return true;
+  }
+  try {
+    createTray(window);
+    return true;
+  } catch (error) {
+    console.error("[Main] Could not create system tray:", error);
+    return false;
+  }
+}
+function hideToTray(window, event) {
+  if (!window || !ensureTray(window)) {
+    console.error("[Main] Tray is unavailable; keeping the window visible");
+    return false;
+  }
+  event?.preventDefault?.();
+  hideWindow(window);
+  return true;
+}
 var appIconPath = process.resourcesPath && process.defaultApp !== true ? path5.join(process.resourcesPath, "app.asar", "icon.png") : path5.resolve(__dirname, "../../icon.png");
 import_electron5.app.setName("Remon Download");
 if (process.platform === "win32") {
@@ -3770,12 +3852,23 @@ function createWindow() {
     },
     onMinimizeToTrayChanged: (enabled, window) => {
       minimizeToTrayEnabled = enabled;
-      if (enabled && !hasTray()) {
-        createTray(window);
-      } else if (!enabled && hasTray()) {
-        destroyTray();
+      const targetWindow = window ?? mainWindow ?? import_electron5.BrowserWindow.getAllWindows()[0] ?? null;
+      if (enabled) {
+        ensureTray(targetWindow);
       }
     }
+  });
+  import_electron5.app.on("browser-window-created", (_, createdWindow) => {
+    createdWindow.on("minimize", (event) => {
+      if (minimizeToTrayEnabled) {
+        if (hideToTray(createdWindow, event)) {
+          console.log("[Main] Window minimize intercepted, hiding to tray");
+        }
+      }
+    });
+    createdWindow.on("restore", () => {
+      createdWindow.setSkipTaskbar(false);
+    });
   });
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   if (devServerUrl) {
@@ -3787,18 +3880,21 @@ function createWindow() {
   }
   mainWindow.on("minimize", (event) => {
     if (mainWindow && minimizeToTrayEnabled) {
-      if (typeof event.preventDefault === "function") {
-        event.preventDefault();
+      if (hideToTray(mainWindow, event)) {
+        console.log("[Main] Window minimize intercepted, hiding to tray");
       }
-      hideWindow(mainWindow);
-      console.log("[Main] Window minimize intercepted, hiding to tray");
+    }
+  });
+  mainWindow.on("restore", () => {
+    if (mainWindow) {
+      mainWindow.setSkipTaskbar(false);
     }
   });
   mainWindow.on("close", (event) => {
     if (mainWindow && minimizeToTrayEnabled) {
-      event.preventDefault();
-      hideWindow(mainWindow);
-      console.log("[Main] Window close intercepted, hiding to tray");
+      if (hideToTray(mainWindow, event)) {
+        console.log("[Main] Window close intercepted, hiding to tray");
+      }
     }
   });
   mainWindow.on("closed", () => {
@@ -3810,16 +3906,21 @@ import_electron5.app.whenReady().then(async () => {
   const settings = await settingsService.get();
   minimizeToTrayEnabled = settings.minimizeToTray;
   createWindow();
-  if (mainWindow && minimizeToTrayEnabled) {
-    createTray(mainWindow);
+  if (mainWindow) {
+    ensureTray(mainWindow);
   }
   import_electron5.app.on("activate", () => {
     if (mainWindow === null) {
       createWindow();
       if (mainWindow) {
-        createTray(mainWindow);
+        ensureTray(mainWindow);
       }
     } else {
+      showWindow(mainWindow);
+    }
+  });
+  import_electron5.globalShortcut.register("CommandOrControl+Shift+R", () => {
+    if (mainWindow) {
       showWindow(mainWindow);
     }
   });
@@ -3840,5 +3941,6 @@ import_electron5.app.on("before-quit", () => {
     schedulerLoop = null;
   }
   destroyTray();
+  import_electron5.globalShortcut.unregister("CommandOrControl+Shift+R");
 });
 //# sourceMappingURL=main.cjs.map

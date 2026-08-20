@@ -205,13 +205,18 @@ type YtdlpRawOutput = YtdlpRawVideo | YtdlpRawPlaylist;
 
 function bundledYtdlpCandidates(): string[] {
   const candidates: string[] = [];
+
+  const projectRuntime = path.resolve(process.cwd(), "runtime", "yt-dlp.exe");
+  const repoRuntime = path.resolve(__dirname, "../../runtime/yt-dlp.exe");
+
   if (process.resourcesPath) {
     candidates.push(path.join(process.resourcesPath, "runtime", "yt-dlp.exe"));
   }
-  if (process.defaultApp === true) {
-    candidates.push(path.resolve(__dirname, "../../runtime/yt-dlp.exe"));
-  }
-  return candidates;
+
+  candidates.push(projectRuntime);
+  candidates.push(repoRuntime);
+
+  return Array.from(new Set(candidates.filter(Boolean)));
 }
 
 // ─── Metadata Parsers ───────────────────────────────────────────────────────
@@ -467,13 +472,16 @@ export class NativeMetadataService {
   private async executeYtdlp(
     ytdlpPath: string,
     url: string,
-    isPlaylist = false
+    isPlaylist = false,
+    extractorArg = "youtube:player_client=android"
   ): Promise<YtdlpRawOutput> {
     return new Promise((resolve, reject) => {
       const args = [
         "--dump-single-json",
         isPlaylist ? "--yes-playlist" : "--no-playlist",
         ...(isPlaylist ? ["--flat-playlist"] : []),
+        "--extractor-args",
+        extractorArg,
         "--skip-download",
         "--no-warnings",
         url
@@ -555,6 +563,49 @@ export class NativeMetadataService {
     });
   }
 
+  private isRetryableYtdlpFailure(error: unknown): boolean {
+    const message = String(error).toLowerCase();
+    return [
+      "video unavailable",
+      "not available",
+      "private video",
+      "members-only",
+      "network",
+      "connection",
+      "ytdlp_failed",
+      "ytdlp_timeout",
+      "unsupported_url"
+    ].some((token) => message.includes(token));
+  }
+
+  private async executeYtdlpWithFallback(
+    ytdlpPath: string,
+    url: string,
+    isPlaylist = false
+  ): Promise<YtdlpRawOutput> {
+    const extractorArgCandidates = [
+      "youtube:player_client=android",
+      "youtube:player_client=web",
+      "youtube:player_client=ios",
+      "youtube:player_client=tv_embedded"
+    ];
+
+    let lastError: unknown = null;
+
+    for (const extractorArg of extractorArgCandidates) {
+      try {
+        return await this.executeYtdlp(ytdlpPath, url, isPlaylist, extractorArg);
+      } catch (error) {
+        lastError = error;
+        if (!this.isRetryableYtdlpFailure(error)) {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError ?? new Error("ytdlp_failed");
+  }
+
   /**
    * Analyzes a YouTube URL using yt-dlp and returns typed AnalysisResult.
    */
@@ -605,7 +656,7 @@ export class NativeMetadataService {
 
     // Handle different link types
     if (linkType === "playlist" || linkType === "channel") {
-      const raw = await this.executeYtdlp(
+      const raw = await this.executeYtdlpWithFallback(
         this.ytdlpPath,
         trimmedUrl,
         true
@@ -624,7 +675,7 @@ export class NativeMetadataService {
       }
     } else {
       // video | shorts | playlist-video
-      const raw = await this.executeYtdlp(
+      const raw = await this.executeYtdlpWithFallback(
         this.ytdlpPath,
         trimmedUrl,
         false
