@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "sonner";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { QueueHistoryBridge } from "./components/QueueHistoryBridge";
@@ -53,7 +53,7 @@ export function App() {
 
   return (
     <ErrorBoundary>
-      <BrowserRouter>
+      <HashRouter>
         <Routes>
           <Route element={<AppLayout />}>
             <Route path={ROUTES.dashboard} element={<DashboardPage />} />
@@ -66,7 +66,7 @@ export function App() {
             <Route path="*" element={<Navigate to={ROUTES.dashboard} replace />} />
           </Route>
         </Routes>
-      </BrowserRouter>
+      </HashRouter>
       <QueueHistoryBridge />
       <Toaster richColors closeButton />
     </ErrorBoundary>

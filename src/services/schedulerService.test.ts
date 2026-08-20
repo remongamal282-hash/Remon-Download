@@ -31,15 +31,28 @@ describe("MockSchedulerService", () => {
     const result = await service.tick(new Date(item.nextRunAt).getTime());
 
     expect(result.triggered).toHaveLength(1);
-    expect(result.triggered[0]?.metadata).toMatchObject({
+    expect(result.triggered[0]?.metadata[0]).toMatchObject({
       sourceUrl: scheduleInput.sourceUrl,
       linkType: "video",
-      title: "scheduled-test"
+      title: "Amazing Nature Documentary"
     });
     expect(result.items[0]).toMatchObject({
       status: "triggered",
       triggerCount: 1
     });
+  });
+
+  it("expands a scheduled playlist into all playlist videos", async () => {
+    const service = new MockSchedulerService();
+    const item = await service.create({
+      ...scheduleInput,
+      sourceUrl: "https://www.youtube.com/playlist?list=PL12345"
+    });
+
+    const result = await service.tick(new Date(item.nextRunAt).getTime());
+
+    expect(result.triggered[0]?.metadata).toHaveLength(5);
+    expect(result.triggered[0]?.metadata.every((video) => video.linkType === "playlist-video")).toBe(true);
   });
 
   it("keeps repeating schedules scheduled and advances the next run", async () => {

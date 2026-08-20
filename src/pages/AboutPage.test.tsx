@@ -12,16 +12,22 @@ describe("AboutPage", () => {
   it("renders required application information", () => {
     render(<AboutPage />);
 
-    expect(screen.getByRole("heading", { name: "Remon Download" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { name: "Remon Download" })).toHaveLength(2);
     expect(screen.getByText("A desktop-style manager for organizing video and media downloads.")).toBeInTheDocument();
     expect(screen.getByText("Application name")).toBeInTheDocument();
     expect(screen.getByText("Version")).toBeInTheDocument();
     expect(screen.getByText("0.1.0")).toBeInTheDocument();
     expect(screen.getByText("Developer")).toBeInTheDocument();
-    expect(screen.getByText("Remon")).toBeInTheDocument();
+    expect(screen.getByText("Remon Gamal")).toBeInTheDocument();
+    expect(screen.getByText("About the developer")).toBeInTheDocument();
+    expect(screen.getByText(/Supported platforms:/)).toBeInTheDocument();
     expect(screen.getByText("Contact")).toBeInTheDocument();
     expect(screen.getByText("Phone:")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "01067006714" })).toHaveAttribute("href", "tel:01067006714");
+    const englishLinks = screen.getAllByRole("link", { name: "201067006714" });
+    expect(englishLinks).toHaveLength(2);
+    expect(englishLinks[0]).toHaveAttribute("href", "tel:+201067006714");
+    expect(englishLinks[1]).toHaveAttribute("href", "https://wa.me/201067006714");
+    expect(screen.getByText("WhatsApp:")).toBeInTheDocument();
     expect(screen.getByText("Email:")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "remongamal282@gmail.com" })).toHaveAttribute(
       "href",
@@ -40,9 +46,15 @@ describe("AboutPage", () => {
     expect(screen.getByText("اسم التطبيق")).toBeInTheDocument();
     expect(screen.getByText("الإصدار")).toBeInTheDocument();
     expect(screen.getByText("المطور")).toBeInTheDocument();
+    expect(screen.getByText("عن المطور")).toBeInTheDocument();
+    expect(screen.getByText(/الأنظمة المدعومة:/)).toBeInTheDocument();
     expect(screen.getByText("التواصل")).toBeInTheDocument();
     expect(screen.getByText("الهاتف:")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "01067006714" })).toHaveAttribute("href", "tel:01067006714");
+    const arabicLinks = screen.getAllByRole("link", { name: "201067006714" });
+    expect(arabicLinks).toHaveLength(2);
+    expect(arabicLinks[0]).toHaveAttribute("href", "tel:+201067006714");
+    expect(arabicLinks[1]).toHaveAttribute("href", "https://wa.me/201067006714");
+    expect(screen.getByText("واتساب:")).toBeInTheDocument();
     expect(screen.getByText("البريد الإلكتروني:")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "remongamal282@gmail.com" })).toHaveAttribute(
       "href",

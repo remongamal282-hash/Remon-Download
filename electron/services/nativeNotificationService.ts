@@ -11,6 +11,7 @@ export class NativeNotificationService {
   private sentKeys = new Set<string>();
   private pendingKeys = new Set<string>();
   private thumbnailPaths = new Map<string, string>();
+  private thumbnailImages = new Map<string, Electron.NativeImage>();
 
   constructor(settings: AppSettings) {
     this.settings = settings;
@@ -38,7 +39,7 @@ export class NativeNotificationService {
         body: this.settings.language === "ar"
           ? "تم تحميل الفيديو بنجاح"
           : "Download completed successfully"
-      }, item.thumbnail);
+      }, this.resolveNotificationThumbnail(item));
       return;
     }
 
@@ -51,7 +52,7 @@ export class NativeNotificationService {
       this.sendDownloadOnce(`failed:${payload.id}`, {
         title: item.title || "Remon Download",
         body: this.getFailureNotificationMessage(payload.errorCode, payload.errorMessage)
-      }, item.thumbnail);
+      }, this.resolveNotificationThumbnail(item));
     }
   }
 
@@ -121,7 +122,54 @@ export class NativeNotificationService {
       body: this.settings.language === "ar"
         ? "تمت إضافة التحميل المجدول إلى قائمة التنزيلات"
         : "Scheduled download queued"
-    }, metadata?.thumbnail);
+    }, this.resolveVideoThumbnail(metadata?.thumbnail, metadata?.sourceUrl ?? schedule.sourceUrl));
+  }
+
+  private resolveNotificationThumbnail(item: Pick<DownloadItem, "id" | "title" | "thumbnail" | "sourceUrl">): string | undefined {
+    if (item.thumbnail && /^https?:\/\//i.test(item.thumbnail)) {
+      return item.thumbnail;
+    }
+
+    const sourceUrl = item.sourceUrl;
+    if (!sourceUrl) {
+      return undefined;
+    }
+
+    const source = sourceUrl.toLowerCase();
+    const playlistLike = /playlist|list=|index=|&list=|\?list=/i.test(source) || /playlist/i.test(item.id || "") || /playlist/i.test(item.title || "");
+    if (!playlistLike) {
+      return undefined;
+    }
+
+    try {
+      const videoId = new URL(sourceUrl).searchParams.get("v");
+      return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private resolveVideoThumbnail(thumbnailUrl?: string, sourceUrl?: string): string | undefined {
+    if (thumbnailUrl && /^https?:\/\//i.test(thumbnailUrl)) {
+      return thumbnailUrl;
+    }
+
+    if (!sourceUrl) {
+      return undefined;
+    }
+
+    const source = sourceUrl.toLowerCase();
+    const playlistLike = /playlist|list=|index=|&list=|\?list=/i.test(source);
+    if (!playlistLike) {
+      return undefined;
+    }
+
+    try {
+      const videoId = new URL(sourceUrl).searchParams.get("v");
+      return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private sendOnce(key: string, options: { title: string; body: string }): void {
@@ -187,7 +235,9 @@ export class NativeNotificationService {
         return;
       }
 
-      const icon = options.icon ? nativeImage.createFromPath(options.icon) : undefined;
+      const icon = options.icon
+        ? (this.thumbnailImages.get(options.icon) ?? nativeImage.createFromPath(options.icon))
+        : undefined;
       const notificationOptions = icon ? { ...options, icon } : options;
       const notification = new Notification(notificationOptions);
       if (icon?.isEmpty()) {
@@ -207,28 +257,59 @@ export class NativeNotificationService {
       return cachedPath;
     }
 
-    const response = await fetch(thumbnailUrl, { signal: AbortSignal.timeout(5000) });
-    if (!response.ok) {
-      throw new Error(`Thumbnail request failed with status ${response.status}`);
-    }
-
-    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-    const extension = contentType.includes("png") ? ".png" : contentType.includes("webp") ? ".webp" : ".jpg";
+    const thumbnailCandidates = this.getThumbnailCandidates(thumbnailUrl);
     const thumbnailDirectory = path.join(app.getPath("temp"), "remon-download-thumbnails");
-    const thumbnailPath = path.join(
-      thumbnailDirectory,
-      `${createHash("sha256").update(thumbnailUrl).digest("hex")}${extension}`
-    );
 
-    try {
-      await fs.access(thumbnailPath);
-    } catch {
-      await fs.mkdir(thumbnailDirectory, { recursive: true });
-      const imageData = Buffer.from(await response.arrayBuffer());
-      await fs.writeFile(thumbnailPath, imageData);
+    let lastError: unknown;
+    for (const candidate of thumbnailCandidates) {
+      try {
+        const response = await fetch(candidate);
+        if (!response.ok) {
+          throw new Error(`Thumbnail request failed with status ${response.status}`);
+        }
+
+        const imageData = Buffer.from(await response.arrayBuffer());
+        if (imageData.length === 0) {
+          throw new Error("Thumbnail response was empty");
+        }
+
+        const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+        const extension = contentType.includes("png") ? ".png" : contentType.includes("webp") ? ".webp" : ".jpg";
+        const thumbnailPath = path.join(
+          thumbnailDirectory,
+          `${createHash("sha256").update(candidate).digest("hex")}${extension}`
+        );
+
+        await fs.mkdir(thumbnailDirectory, { recursive: true });
+        await fs.writeFile(thumbnailPath, imageData);
+        if (typeof nativeImage.createFromBuffer === "function") {
+          const image = nativeImage.createFromBuffer(imageData);
+          if (image.isEmpty()) {
+            throw new Error("Thumbnail image could not be decoded");
+          }
+          this.thumbnailImages.set(thumbnailPath, image);
+        }
+        this.thumbnailPaths.set(thumbnailUrl, thumbnailPath);
+        return thumbnailPath;
+      } catch (error) {
+        lastError = error;
+      }
     }
 
-    this.thumbnailPaths.set(thumbnailUrl, thumbnailPath);
-    return thumbnailPath;
+    throw lastError instanceof Error ? lastError : new Error("Thumbnail unavailable");
+  }
+
+  private getThumbnailCandidates(thumbnailUrl: string): string[] {
+    const candidates = [thumbnailUrl];
+    const videoIdMatch = thumbnailUrl.match(/\/vi\/([^/]+)/i);
+    if (videoIdMatch?.[1]) {
+      const videoId = videoIdMatch[1];
+      candidates.push(
+        `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
+        `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        `https://i.ytimg.com/vi/${videoId}/default.jpg`
+      );
+    }
+    return [...new Set(candidates)];
   }
 }

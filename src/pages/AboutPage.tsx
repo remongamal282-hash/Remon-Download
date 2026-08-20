@@ -1,7 +1,8 @@
 import { useTranslation } from "react-i18next";
 import { Download, Info } from "lucide-react";
 
-const CONTACT_PHONE = "01067006714";
+const CONTACT_PHONE = "201067006714";
+const CONTACT_WHATSAPP = "201067006714";
 const CONTACT_EMAIL = "remongamal282@gmail.com";
 
 export function AboutPage() {
@@ -9,7 +10,7 @@ export function AboutPage() {
   const details = [
     { label: t("about.applicationName"), value: t("app.name") },
     { label: t("common.version"), value: __APP_VERSION__ },
-    { label: t("about.developer"), value: "Remon" }
+    { label: t("about.developer"), value: "Remon Gamal" }
   ];
 
   return (
@@ -32,6 +33,18 @@ export function AboutPage() {
       </div>
 
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <h2 className="text-lg font-semibold">{t("about.developerTitle")}</h2>
+        <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">{t("about.developerDescription")}</p>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <h2 className="text-lg font-semibold">{t("about.productTitle")}</h2>
+        <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">{t("about.productDescription")}</p>
+        <p className="mt-3 text-sm font-medium">{t("about.platforms")}: {t("about.platformList")}</p>
+        <p className="mt-4 text-xs text-slate-500 dark:text-slate-400">{t("about.copyright")}</p>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="mb-4 flex items-center gap-2">
           <Info aria-hidden="true" size={18} className="text-brand-600 dark:text-brand-50" />
           <h2 className="text-lg font-semibold">{t("about.details")}</h2>
@@ -48,8 +61,20 @@ export function AboutPage() {
             <dd className="mt-2 space-y-2 break-words font-medium">
               <div>
                 <span className="text-slate-500 dark:text-slate-400">{t("about.phone")}: </span>
-                <a className="text-brand-700 hover:underline dark:text-brand-50" href={`tel:${CONTACT_PHONE}`} dir="ltr">
+                <a className="text-brand-700 hover:underline dark:text-brand-50" href={`tel:+${CONTACT_PHONE}`} dir="ltr">
                   {CONTACT_PHONE}
+                </a>
+              </div>
+              <div>
+                <span className="text-slate-500 dark:text-slate-400">{t("about.whatsapp")}: </span>
+                <a
+                  className="text-brand-700 hover:underline dark:text-brand-50"
+                  href={`https://wa.me/${CONTACT_WHATSAPP}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  dir="ltr"
+                >
+                  {CONTACT_WHATSAPP}
                 </a>
               </div>
               <div>

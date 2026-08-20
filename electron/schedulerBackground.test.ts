@@ -61,7 +61,7 @@ describe('SchedulerBackgroundLoop', () => {
     const schedulerService = {
       tick: vi.fn(async () => ({
         items: [schedule],
-        triggered: [{ schedule, metadata }],
+        triggered: [{ schedule, metadata: [metadata] }],
       })),
     };
 
@@ -98,8 +98,8 @@ describe('SchedulerBackgroundLoop', () => {
     const start = vi.fn(async (id: string) => ({ id, status: 'downloading' }));
     const schedulerService = {
       tick: vi.fn()
-        .mockResolvedValueOnce({ items: [schedule], triggered: [{ schedule, metadata }] })
-        .mockResolvedValueOnce({ items: [schedule], triggered: [{ schedule, metadata }] })
+        .mockResolvedValueOnce({ items: [schedule], triggered: [{ schedule, metadata: [metadata] }] })
+        .mockResolvedValueOnce({ items: [schedule], triggered: [{ schedule, metadata: [metadata] }] })
     };
 
     const loop = new SchedulerBackgroundLoop({
@@ -114,6 +114,60 @@ describe('SchedulerBackgroundLoop', () => {
     expect(add).toHaveBeenCalledTimes(1);
     expect(start).toHaveBeenCalledTimes(1);
     loop.stop();
+  });
+
+  it('starts one native download for every scheduled playlist video', async () => {
+    const schedule = makeSchedule({ id: 'sched-playlist', status: 'triggered', triggerCount: 1 });
+    const metadata = [makeMetadata({ id: 'playlist-video-1' }), makeMetadata({ id: 'playlist-video-2' })];
+    const add = vi.fn(async (item: DownloadItem) => item);
+    const start = vi.fn(async (id: string) => ({ id, status: 'downloading' }));
+    const schedulerService = {
+      tick: vi.fn(async () => ({ items: [schedule], triggered: [{ schedule, metadata }] }))
+    };
+
+    const loop = new SchedulerBackgroundLoop({
+      schedulerService: schedulerService as any,
+      getDownloadService: () => ({ add, start }) as any,
+      pollMs: 1000,
+    });
+
+    await loop.tickOnce(Date.now());
+
+    expect(add).toHaveBeenCalledTimes(2);
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  it('queues remaining scheduled playlist videos when the concurrent limit is one', async () => {
+    const schedule = makeSchedule({ id: 'sched-limited', status: 'triggered', triggerCount: 1 });
+    const metadata = [makeMetadata({ id: 'playlist-video-1' }), makeMetadata({ id: 'playlist-video-2' })];
+    const add = vi.fn(async (item: DownloadItem) => item);
+    const start = vi.fn()
+      .mockResolvedValueOnce({ id: 'scheduled-1', status: 'downloading' })
+      .mockRejectedValueOnce(new Error('Concurrent download limit reached'))
+      .mockResolvedValueOnce({ id: 'scheduled-2', status: 'downloading' });
+    const schedulerService = {
+      tick: vi.fn(async () => ({ items: [schedule], triggered: [{ schedule, metadata }] })),
+      update: vi.fn(async () => schedule)
+    };
+    const listeners: Array<(payload: any) => void> = [];
+    const downloadService = {
+      add,
+      start,
+      on: vi.fn((_event: string, listener: (payload: any) => void) => listeners.push(listener))
+    };
+    const loop = new SchedulerBackgroundLoop({
+      schedulerService: schedulerService as any,
+      getDownloadService: () => downloadService as any,
+      pollMs: 1000,
+    });
+
+    await loop.tickOnce(Date.now());
+    expect(add).toHaveBeenCalledTimes(2);
+    expect(start).toHaveBeenCalledTimes(2);
+
+    listeners[0]?.({ id: add.mock.calls[0]?.[0].id, status: 'completed', progress: 100, downloadedSize: 1, fileSize: 1, speed: 0, eta: '--' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(start).toHaveBeenCalledTimes(3);
   });
 
   it('works without a SchedulerPage and can be stopped cleanly', async () => {

@@ -114,7 +114,7 @@ export interface IpcContractResponses {
   [IPC_CHANNELS.SCHEDULER_UPDATE]: ScheduledDownload;
   [IPC_CHANNELS.SCHEDULER_CANCEL]: ScheduledDownload;
   [IPC_CHANNELS.SCHEDULER_REMOVE]: string;
-  [IPC_CHANNELS.SCHEDULER_TICK]: { items: ScheduledDownload[]; triggered: Array<{ schedule: ScheduledDownload; metadata: import("../../src/types/download").VideoMetadata }> };
+  [IPC_CHANNELS.SCHEDULER_TICK]: { items: ScheduledDownload[]; triggered: Array<{ schedule: ScheduledDownload; metadata: import("../../src/types/download").VideoMetadata[] }> };
 }
 
 /**

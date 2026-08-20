@@ -130,7 +130,7 @@ describe("useQueueStore", () => {
     expect(statuses.filter((status: any) => status === "queued")).toHaveLength(1);
   });
 
-  it("pauses, resumes, cancels, retries, and removes items", () => {
+  it("pauses, resumes, cancels, retries, and removes items", async () => {
     const item = useQueueStore.getState().addFromMetadata(metadata, "1080p", "mp4");
     useQueueStore.getState().tick(1, "unlimited", 1000);
     useQueueStore.getState().tick(1, "unlimited", 1700);
@@ -147,7 +147,7 @@ describe("useQueueStore", () => {
     useQueueStore.getState().retry(item.id);
     expect(useQueueStore.getState().items[0]?.status).toBe("retrying");
 
-    useQueueStore.getState().remove(item.id);
+    await useQueueStore.getState().remove(item.id);
     expect(useQueueStore.getState().items).toHaveLength(0);
   });
 

@@ -14,6 +14,10 @@ import * as path from "path";
 let tray: Tray | null = null;
 
 const getIconPath = (): string => {
+  if (process.resourcesPath && process.defaultApp !== true) {
+    return path.join(process.resourcesPath, "app.asar", "icon.png");
+  }
+
   const applicationPath = typeof app.getAppPath === "function"
     ? app.getAppPath()
     : path.resolve(__dirname, "../..");

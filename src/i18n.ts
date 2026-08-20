@@ -255,11 +255,19 @@ export const resources = {
       },
       about: {
         description: "A desktop-style manager for organizing video and media downloads.",
+        developerTitle: "About the developer",
+        developerDescription: "Remon Gamal is a software developer focused on modern frontend and cross-platform desktop applications, with an emphasis on reliable performance and clear user experiences.",
+        productTitle: "Remon Download",
+        productDescription: "An independent application for managing video and audio downloads with queue management, quality selection, pause, resume, retry, scheduling, history, favorites, system tray integration, notifications, and persistent settings.",
+        platforms: "Supported platforms",
+        platformList: "Windows, macOS, Linux",
+        copyright: "© 2026 Remon Gamal — All Rights Reserved",
         applicationName: "Application name",
         details: "Application details",
         developer: "Developer",
         contact: "Contact",
         phone: "Phone",
+        whatsapp: "WhatsApp",
         email: "Email"
       },
       devTools: {
@@ -544,11 +552,19 @@ export const resources = {
       },
       about: {
         description: "مدير بأسلوب تطبيق سطح مكتب لتنظيم تنزيلات الفيديو والوسائط.",
+        developerTitle: "عن المطور",
+        developerDescription: "Remon Gamal مطور برمجيات مهتم بتطوير تطبيقات Frontend وتطبيقات سطح المكتب متعددة الأنظمة، مع التركيز على الواجهات الحديثة والأداء المستقر وتجربة المستخدم المميزة.",
+        productTitle: "Remon Download",
+        productDescription: "تطبيق مستقل لإدارة وتنظيم تنزيلات الفيديو والصوت، مع دعم اختيار الجودة والصيغة وإدارة Queue والإيقاف والاستئناف وإعادة المحاولة والإلغاء والجدولة والسجل والمفضلة وشريط النظام والإشعارات وحفظ البيانات بشكل دائم.",
+        platforms: "الأنظمة المدعومة",
+        platformList: "Windows، macOS، Linux",
+        copyright: "© 2026 Remon Gamal — جميع الحقوق محفوظة",
         applicationName: "اسم التطبيق",
         details: "تفاصيل التطبيق",
         developer: "المطور",
         contact: "التواصل",
         phone: "الهاتف",
+        whatsapp: "واتساب",
         email: "البريد الإلكتروني"
       },
       devTools: {

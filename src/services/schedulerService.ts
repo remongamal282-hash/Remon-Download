@@ -1,4 +1,5 @@
-import type { ScheduledDownload, ScheduleRepeat, VideoMetadata } from "../types/download";
+import type { AnalysisResult, ScheduledDownload, ScheduleRepeat, VideoMetadata } from "../types/download";
+import { metadataService } from "./metadataService";
 import type { ErrorModel } from "../types/errors";
 
 export interface SchedulerInput {
@@ -12,7 +13,7 @@ export interface SchedulerTickResult {
   items: ScheduledDownload[];
   triggered: Array<{
     schedule: ScheduledDownload;
-    metadata: VideoMetadata;
+    metadata: VideoMetadata[];
   }>;
 }
 
@@ -78,11 +79,30 @@ function deriveVideoThumbnail(sourceUrl: string): string {
   return "https://picsum.photos/seed/remon-scheduled/320/180";
 }
 
-async function createMetadata(schedule: ScheduledDownload): Promise<VideoMetadata> {
+async function createMetadata(schedule: ScheduledDownload): Promise<VideoMetadata[]> {
   const triggerNumber = schedule.triggerCount + 1;
   const fallbackTitle = `Scheduled Download ${triggerNumber}`;
 
-  return {
+  try {
+    const analyzed: AnalysisResult = await metadataService.analyze(schedule.sourceUrl);
+    if (analyzed.linkType === "playlist") {
+      return analyzed.videos.map((video, index) => ({
+        ...video,
+        id: `scheduled-${schedule.id}-${triggerNumber}-${index + 1}`
+      }));
+    }
+
+    if (analyzed.linkType !== "channel") {
+      return [{
+        ...analyzed,
+        id: `scheduled-${schedule.id}-${triggerNumber}`
+      }];
+    }
+  } catch {
+    // Fall back to URL-based metadata when analysis fails.
+  }
+
+  return [{
     id: `scheduled-${schedule.id}-${triggerNumber}`,
     sourceUrl: schedule.sourceUrl,
     linkType: "video",
@@ -103,7 +123,7 @@ async function createMetadata(schedule: ScheduledDownload): Promise<VideoMetadat
     container: "mp4",
     fileSize: 220 * 1024 * 1024,
     uploadDate: "2026-08-01"
-  };
+  }];
 }
 
 export class MockSchedulerService implements SchedulerService {

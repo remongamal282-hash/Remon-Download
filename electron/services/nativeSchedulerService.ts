@@ -189,11 +189,11 @@ export class NativeSchedulerService {
     return id;
   }
 
-  async tick(now: number): Promise<{ items: ScheduledDownload[]; triggered: Array<{ schedule: ScheduledDownload; metadata: VideoMetadata }> }> {
+  async tick(now: number): Promise<{ items: ScheduledDownload[]; triggered: Array<{ schedule: ScheduledDownload; metadata: VideoMetadata[] }> }> {
     this.throwIfNeeded();
     await this.ensureInitialized();
 
-    const triggered: Array<{ schedule: ScheduledDownload; metadata: VideoMetadata }> = [];
+    const triggered: Array<{ schedule: ScheduledDownload; metadata: VideoMetadata[] }> = [];
     const nowIso = new Date(now).toISOString();
     const nextItems: ScheduledDownload[] = [];
 
@@ -270,17 +270,23 @@ export class NativeSchedulerService {
     return item;
   }
 
-  private async createMetadata(schedule: ScheduledDownload): Promise<VideoMetadata> {
+  private async createMetadata(schedule: ScheduledDownload): Promise<VideoMetadata[]> {
     const triggerNumber = schedule.triggerCount + 1;
     const fallbackTitle = `Scheduled Download ${triggerNumber}`;
 
     try {
       const analyzed = await new NativeMetadataService().analyze(schedule.sourceUrl);
+      if (analyzed.linkType === 'playlist') {
+        return analyzed.videos.map((video, index) => ({
+          ...video,
+          id: `scheduled-${schedule.id}-${triggerNumber}-${index + 1}`,
+        }));
+      }
       if (analyzed.linkType === 'video' || analyzed.linkType === 'shorts' || analyzed.linkType === 'playlist-video') {
-        return {
+        return [{
           ...analyzed,
           id: `scheduled-${schedule.id}-${triggerNumber}`,
-        };
+        }];
       }
     } catch {
       // Fall back to URL-based metadata when the yt-dlp lookup fails.
@@ -319,7 +325,7 @@ export class NativeSchedulerService {
       return 'https://picsum.photos/seed/remon-scheduled/320/180';
     })();
 
-    return {
+    return [{
       id: `scheduled-${schedule.id}-${triggerNumber}`,
       sourceUrl: schedule.sourceUrl,
       linkType: 'video',
@@ -340,6 +346,6 @@ export class NativeSchedulerService {
       container: 'mp4',
       fileSize: 220 * 1024 * 1024,
       uploadDate: '2026-08-01',
-    };
+    }];
   }
 }

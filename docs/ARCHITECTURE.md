@@ -9,6 +9,10 @@
 - Service interfaces with mock implementations
 - Electron (Phase 2) for native desktop capabilities
 
+## Windows Packaging (Phase 3.5)
+
+electron-builder produces an NSIS installer as the official distribution and a Portable executable as an optional build. `asar` contains application code; `yt-dlp.exe`, `ffmpeg.exe`, and `ffprobe.exe` are supplied through `extraResources` at `resources/runtime` so Main Process `spawn` can execute them. Persistent JSON data stays under `app.getPath("userData")`, outside the installation directory.
+
 ## Layered Data Flow
 
 ### Web / Vitest Mode

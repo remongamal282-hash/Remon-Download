@@ -10,6 +10,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DownloadItem } from "../types/download";
 import {
   isElectronEnvironment,
   resolveMetadataService,

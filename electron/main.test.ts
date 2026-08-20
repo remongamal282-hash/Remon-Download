@@ -44,17 +44,30 @@ describe("Main Process Lifecycle (Tray Integration)", () => {
   });
 
   describe("Window Minimize Behavior", () => {
-    it("should minimize window via tray", () => {
+    it("should hide window to tray instead of actually minimizing when enabled", () => {
+      const mockEvent = {
+        preventDefault: vi.fn()
+      };
+
       const mockWindow: any = {
         on: vi.fn(),
         minimize: vi.fn(),
-        hide: vi.fn()
+        hide: vi.fn(),
+        isVisible: vi.fn(() => false)
       };
 
-      mockWindow.on("minimize", () => {
+      const handler = (event: { preventDefault: () => void }) => {
+        if (event && typeof event.preventDefault === "function") {
+          event.preventDefault();
+        }
         mockWindow.hide();
-      });
+      };
 
+      mockWindow.on("minimize", handler);
+      handler(mockEvent);
+
+      expect(mockEvent.preventDefault).toHaveBeenCalled();
+      expect(mockWindow.hide).toHaveBeenCalled();
       expect(mockWindow.on).toHaveBeenCalledWith("minimize", expect.any(Function));
     });
   });

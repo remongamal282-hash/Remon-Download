@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — Phase 3.5 Packaging
+
+Added Windows NSIS and Portable packaging configuration, bundled yt-dlp/FFmpeg resources, production runtime path resolution, and installer documentation. Manual Installer E2E and the existing full-suite localStorage environment failures remain to be resolved before final Phase 3.5 sign-off.
+
 ## 1.2.0-system-tray (Phase 3.2 Automated Complete | Manual In Progress)
 
 Added:

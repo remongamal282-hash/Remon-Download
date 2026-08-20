@@ -21,7 +21,7 @@ interface QueueState {
   reorder: (activeId: string, overId: string) => void;
   tick: (concurrentDownloads: number, speedLimit: SpeedLimit, now?: number) => void;
   markHistoryRecorded: (id: string, recordedAt: string) => void;
-  remove: (id: string) => void;
+  remove: (id: string) => Promise<void>;
   clear: () => void;
   clearLastError: () => void;
 }
@@ -194,7 +194,8 @@ export const useQueueStore = create<QueueState>((set, get) => {
         return { items: normalizeOrder(nextItems), lastError: state.lastError };
       });
     },
-    remove: (id) => {
+    remove: async (id) => {
+      await resolveDownloadService().remove(id);
       set((state) => ({
         items: state.items
           .filter((item) => item.id !== id)

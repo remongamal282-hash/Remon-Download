@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DownloadItem, ScheduledDownload } from "../../src/types/download";
+import type { DownloadItem, ScheduledDownload, VideoMetadata } from "../../src/types/download";
 import type { AppSettings } from "../../src/types/settings";
 import { NativeNotificationService } from "./nativeNotificationService";
 
@@ -262,6 +262,56 @@ describe("NativeNotificationService", () => {
       body: "Download completed successfully",
       icon: expect.objectContaining({ filePath: expect.stringContaining("remon-download-thumbnails") })
     });
+    vi.unstubAllGlobals();
+  });
+
+  it("uses one scheduled playlist notification for the playlist", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(Uint8Array.from([1, 2, 3]), {
+      status: 200,
+      headers: { "content-type": "image/jpeg" }
+    })));
+    const service = new NativeNotificationService(createSettings());
+    const schedule = createSchedule({ id: "schedule-playlist", triggerCount: 1 });
+
+    service.notifyScheduledDownload(schedule, {
+      ...createItem(),
+      id: "playlist-video-1",
+      title: "First Playlist Video",
+      thumbnail: "https://example.com/first.jpg"
+    } as unknown as VideoMetadata);
+    service.notifyScheduledDownload(schedule, {
+      ...createItem(),
+      id: "playlist-video-2",
+      title: "Second Playlist Video",
+      thumbnail: "https://example.com/second.jpg"
+    } as unknown as VideoMetadata);
+
+    await vi.waitFor(() => expect(notificationConstructor).toHaveBeenCalledTimes(1));
+    expect(notificationInstances[0]?.options).toMatchObject({ title: "First Playlist Video" });
+    expect(nativeImageMock.createFromPath).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
+
+  it("derives a playlist notification thumbnail from the video source URL", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(Uint8Array.from([1, 2, 3]), {
+      status: 200,
+      headers: { "content-type": "image/jpeg" }
+    })));
+    const service = new NativeNotificationService(createSettings());
+
+    service.handleDownloadStateChange(
+      { id: "playlist-download-2", status: "completed", progress: 100, downloadedSize: 100, fileSize: 100, speed: 0, eta: "--" },
+      createItem({
+        id: "playlist-download-2",
+        title: "Playlist Video 2",
+        thumbnail: "",
+        sourceUrl: "https://www.youtube.com/watch?v=playlist-video-2"
+      })
+    );
+
+    await vi.waitFor(() => expect(notificationConstructor).toHaveBeenCalledTimes(1));
+    expect(nativeImageMock.createFromPath).toHaveBeenCalledTimes(1);
+    expect(nativeImageMock.createFromPath.mock.calls[0]?.[0]).toContain("remon-download-thumbnails");
     vi.unstubAllGlobals();
   });
 

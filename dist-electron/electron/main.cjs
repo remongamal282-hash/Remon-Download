@@ -23,7 +23,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 
 // electron/main.ts
 var import_electron5 = require("electron");
-var path4 = __toESM(require("path"), 1);
+var path5 = __toESM(require("path"), 1);
 
 // electron/ipc/handlers.ts
 var import_electron4 = require("electron");
@@ -69,6 +69,7 @@ var IPC_EVENTS = {
 // electron/services/nativeMetadataService.ts
 var import_child_process = require("child_process");
 var import_promises = require("fs/promises");
+var path = __toESM(require("path"), 1);
 var YTDLP_TIMEOUT_MS = 15e3;
 var PLAYLIST_TIMEOUT_MS = 25e3;
 var YOUTUBE_HOSTNAMES = /* @__PURE__ */ new Set([
@@ -109,8 +110,8 @@ var DefaultProcessExecutor = class {
   spawn(command, args, options) {
     return (0, import_child_process.spawn)(command, args, options);
   }
-  async checkAccess(path5, mode) {
-    return (0, import_promises.access)(path5, mode);
+  async checkAccess(path6, mode) {
+    return (0, import_promises.access)(path6, mode);
   }
 };
 function isYouTubeUrl(url) {
@@ -141,6 +142,16 @@ function classifyYouTubeUrl(url) {
   }
   return "video";
 }
+function bundledYtdlpCandidates() {
+  const candidates = [];
+  if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, "runtime", "yt-dlp.exe"));
+  }
+  if (process.defaultApp === true) {
+    candidates.push(path.resolve(__dirname, "../../runtime/yt-dlp.exe"));
+  }
+  return candidates;
+}
 function formatDuration(seconds) {
   if (!seconds || seconds <= 0) return "0:00";
   const mins = Math.floor(seconds / 60);
@@ -157,9 +168,10 @@ function extractThumbnail(raw) {
   }
   return "";
 }
-function parseVideoMetadata(raw, linkType, index = 1) {
+function parseVideoMetadata(raw, linkType, index = 1, sourceUrl) {
   const videoId = raw.id ?? `unknown-${index}`;
   const formats = raw.formats ?? [];
+  const thumbnail = extractThumbnail(raw) || (videoId !== `unknown-${index}` ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : "");
   const heights = /* @__PURE__ */ new Set();
   formats.forEach((f) => {
     if (f.height && f.height > 0) {
@@ -183,9 +195,9 @@ function parseVideoMetadata(raw, linkType, index = 1) {
   );
   return {
     id: `yt-${linkType}-${videoId}`,
-    sourceUrl: raw.webpage_url ?? "",
+    sourceUrl: raw.webpage_url ?? sourceUrl ?? (videoId !== `unknown-${index}` ? `https://www.youtube.com/watch?v=${videoId}` : ""),
     linkType,
-    thumbnail: extractThumbnail(raw),
+    thumbnail,
     title: raw.title ?? "Unknown Title",
     channelName: raw.uploader ?? raw.channel ?? "Unknown Channel",
     duration: formatDuration(raw.duration),
@@ -208,9 +220,10 @@ function parseVideoMetadata(raw, linkType, index = 1) {
 function parsePlaylistMetadata(raw, url) {
   const playlistId = raw.id ?? "unknown-playlist";
   const entries = raw.entries ?? [];
-  const videos = entries.slice(0, 10).map(
-    (entry, index) => parseVideoMetadata(entry, "playlist-video", index + 1)
-  );
+  const videos = entries.map((entry, index) => {
+    const entryUrl = entry.url?.startsWith("http") ? entry.url : void 0;
+    return parseVideoMetadata(entry, "playlist-video", index + 1, entryUrl);
+  });
   return {
     id: `yt-playlist-${playlistId}`,
     sourceUrl: url,
@@ -263,6 +276,13 @@ var NativeMetadataService = class {
       } catch {
       }
     }
+    for (const candidate of bundledYtdlpCandidates()) {
+      try {
+        await this.executor.checkAccess(candidate, import_promises.constants.X_OK);
+        return candidate;
+      } catch {
+      }
+    }
     const candidates = [
       "yt-dlp",
       "yt-dlp.exe",
@@ -271,7 +291,7 @@ var NativeMetadataService = class {
     ];
     for (const candidate of candidates) {
       try {
-        await new Promise((resolve3, reject) => {
+        await new Promise((resolve5, reject) => {
           const proc = this.executor.spawn(
             candidate,
             ["--version"],
@@ -280,7 +300,7 @@ var NativeMetadataService = class {
           proc.on("error", reject);
           proc.on("exit", (code) => {
             if (code === 0) {
-              resolve3();
+              resolve5();
             } else {
               reject(new Error(`Exit code ${code}`));
             }
@@ -297,12 +317,11 @@ var NativeMetadataService = class {
    * Optimized for speed with faster options.
    */
   async executeYtdlp(ytdlpPath, url, isPlaylist = false) {
-    return new Promise((resolve3, reject) => {
+    return new Promise((resolve5, reject) => {
       const args = [
         "--dump-single-json",
         isPlaylist ? "--yes-playlist" : "--no-playlist",
-        ...isPlaylist ? ["--flat-playlist", "--playlist-items", "1-5"] : [],
-        // Only first 5 videos for fast preview
+        ...isPlaylist ? ["--flat-playlist"] : [],
         "--skip-download",
         "--no-warnings",
         url
@@ -339,7 +358,7 @@ var NativeMetadataService = class {
             const parsed = JSON.parse(
               stdout
             );
-            resolve3(parsed);
+            resolve5(parsed);
           } catch {
             reject(new Error("ytdlp_invalid_json"));
           }
@@ -431,16 +450,26 @@ var NativeMetadataService = class {
 // electron/services/nativeDownloadService.ts
 var import_events = require("events");
 var import_child_process2 = require("child_process");
-var path = __toESM(require("path"), 1);
+var path2 = __toESM(require("path"), 1);
 var fs = __toESM(require("fs/promises"), 1);
 var import_fs = require("fs");
+function bundledRuntimeCandidates(fileName) {
+  const candidates = [];
+  if (process.resourcesPath) {
+    candidates.push(path2.join(process.resourcesPath, "runtime", fileName));
+  }
+  if (process.defaultApp === true) {
+    candidates.push(path2.resolve(__dirname, "../../runtime", fileName));
+  }
+  return candidates;
+}
 var DefaultProcessExecutor2 = class {
   spawn(command, args, options) {
     const { spawn: spawn2 } = require("child_process");
     return spawn2(command, args, options);
   }
-  checkAccess(path5, mode) {
-    return fs.access(path5, mode);
+  checkAccess(path6, mode) {
+    return fs.access(path6, mode);
   }
 };
 var NativeDownloadService = class extends import_events.EventEmitter {
@@ -483,6 +512,13 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       } catch {
       }
     }
+    for (const candidate of bundledRuntimeCandidates("yt-dlp.exe")) {
+      try {
+        await this.executor.checkAccess(candidate, import_fs.constants.X_OK);
+        return candidate;
+      } catch {
+      }
+    }
     const candidates = [
       "yt-dlp",
       "yt-dlp.exe",
@@ -491,7 +527,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     ];
     for (const candidate of candidates) {
       try {
-        await new Promise((resolve3, reject) => {
+        await new Promise((resolve5, reject) => {
           const proc = this.executor.spawn(
             candidate,
             ["--version"],
@@ -502,7 +538,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
           proc.on("error", reject);
           proc.on("exit", (code) => {
             if (code === 0) {
-              resolve3();
+              resolve5();
             } else {
               reject(
                 new Error(`Exit code ${code}`)
@@ -516,10 +552,23 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     }
     throw new Error("ytdlp_not_found");
   }
+  async resolveBundledFfmpegDirectory() {
+    const ffmpegPaths = bundledRuntimeCandidates("ffmpeg.exe");
+    const ffprobePaths = bundledRuntimeCandidates("ffprobe.exe");
+    for (let index = 0; index < ffmpegPaths.length; index += 1) {
+      try {
+        await this.executor.checkAccess(ffmpegPaths[index], import_fs.constants.X_OK);
+        await this.executor.checkAccess(ffprobePaths[index], import_fs.constants.X_OK);
+        return path2.dirname(ffmpegPaths[index]);
+      } catch {
+      }
+    }
+    return null;
+  }
   /**
    * Builds yt-dlp arguments array for download
    */
-  buildYtdlpArgs(item, outputPath, isResume) {
+  buildYtdlpArgs(item, outputPath, isResume, ffmpegDirectory) {
     const args = [];
     const isAudioFormat = [
       "mp3",
@@ -566,10 +615,11 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       );
       args.push("-r", `${limitKB}K`);
     }
-    if (this.settings.ffmpegPath && this.settings.ffmpegPath.trim()) {
+    const ffmpegLocation = this.settings.ffmpegPath.trim() || ffmpegDirectory;
+    if (ffmpegLocation) {
       args.push(
         "--ffmpeg-location",
-        this.settings.ffmpegPath
+        ffmpegLocation
       );
     }
     args.push(
@@ -592,6 +642,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       "download:%(progress._percent_str)s|%(progress._downloaded_bytes_str)s|%(progress._total_bytes_str)s|%(progress._speed_str)s|%(progress._eta_str)s"
     );
     args.push("--no-warnings");
+    args.push("--no-playlist");
     args.push(item.sourceUrl);
     return args;
   }
@@ -914,7 +965,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     }
     if (downloadFolder.startsWith("~/") || downloadFolder.startsWith("~\\")) {
       const homeDir = process.env.HOME || process.env.USERPROFILE || process.cwd();
-      return path.join(
+      return path2.join(
         homeDir,
         downloadFolder.slice(2)
       );
@@ -1054,6 +1105,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     if (!this.ytdlpPath) {
       this.ytdlpPath = await this.resolveYtdlpPath();
     }
+    const ffmpegDirectory = await this.resolveBundledFfmpegDirectory();
     const fileName = `${item.title.replace(
       /[<>:"/\\|?*]/g,
       "_"
@@ -1061,7 +1113,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     const outputDir = this.resolveDownloadFolder(
       this.settings.downloadFolder
     );
-    const outputPath = path.join(
+    const outputPath = path2.join(
       outputDir,
       fileName
     );
@@ -1134,7 +1186,8 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     const args = this.buildYtdlpArgs(
       item,
       outputPath,
-      canResume
+      canResume,
+      ffmpegDirectory
     );
     console.log(
       `[Download] Starting yt-dlp with ${canResume ? "RESUME" : "FRESH"} (${args.length} args)`
@@ -1597,7 +1650,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     const outputDir = this.resolveDownloadFolder(
       this.settings.downloadFolder
     );
-    const outputPath = path.join(
+    const outputPath = path2.join(
       outputDir,
       fileName
     );
@@ -1716,7 +1769,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
         const outputDir = this.resolveDownloadFolder(
           this.settings.downloadFolder
         );
-        const outputPath = path.join(
+        const outputPath = path2.join(
           outputDir,
           fileName
         );
@@ -1846,7 +1899,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     const outputDir = this.resolveDownloadFolder(
       this.settings.downloadFolder
     );
-    const outputPath = path.join(
+    const outputPath = path2.join(
       outputDir,
       fileName
     );
@@ -2074,9 +2127,9 @@ var import_fs2 = require("fs");
 var import_path = require("path");
 var import_electron = require("electron");
 var realFs = {
-  mkdir: (path5, options) => import_fs2.promises.mkdir(path5, options).then(() => void 0),
-  readFile: (path5, encoding) => import_fs2.promises.readFile(path5, encoding),
-  writeFile: (path5, data, encoding) => import_fs2.promises.writeFile(path5, data, encoding)
+  mkdir: (path6, options) => import_fs2.promises.mkdir(path6, options).then(() => void 0),
+  readFile: (path6, encoding) => import_fs2.promises.readFile(path6, encoding),
+  writeFile: (path6, data, encoding) => import_fs2.promises.writeFile(path6, data, encoding)
 };
 var realApp = {
   getUserDataPath: () => import_electron.app.getPath("userData")
@@ -2392,11 +2445,17 @@ var NativeSchedulerService = class {
     const fallbackTitle = `Scheduled Download ${triggerNumber}`;
     try {
       const analyzed = await new NativeMetadataService().analyze(schedule.sourceUrl);
+      if (analyzed.linkType === "playlist") {
+        return analyzed.videos.map((video, index) => ({
+          ...video,
+          id: `scheduled-${schedule.id}-${triggerNumber}-${index + 1}`
+        }));
+      }
       if (analyzed.linkType === "video" || analyzed.linkType === "shorts" || analyzed.linkType === "playlist-video") {
-        return {
+        return [{
           ...analyzed,
           id: `scheduled-${schedule.id}-${triggerNumber}`
-        };
+        }];
       }
     } catch {
     }
@@ -2426,7 +2485,7 @@ var NativeSchedulerService = class {
       }
       return "https://picsum.photos/seed/remon-scheduled/320/180";
     })();
-    return {
+    return [{
       id: `scheduled-${schedule.id}-${triggerNumber}`,
       sourceUrl: schedule.sourceUrl,
       linkType: "video",
@@ -2447,7 +2506,7 @@ var NativeSchedulerService = class {
       container: "mp4",
       fileSize: 220 * 1024 * 1024,
       uploadDate: "2026-08-01"
-    };
+    }];
   }
 };
 
@@ -2634,12 +2693,13 @@ var NativeFavoritesService = class {
 var import_electron2 = require("electron");
 var import_crypto = require("crypto");
 var import_fs3 = require("fs");
-var path2 = __toESM(require("path"), 1);
+var path3 = __toESM(require("path"), 1);
 var NativeNotificationService = class {
   settings;
   sentKeys = /* @__PURE__ */ new Set();
   pendingKeys = /* @__PURE__ */ new Set();
   thumbnailPaths = /* @__PURE__ */ new Map();
+  thumbnailImages = /* @__PURE__ */ new Map();
   constructor(settings) {
     this.settings = settings;
   }
@@ -2660,7 +2720,7 @@ var NativeNotificationService = class {
       this.sendDownloadOnce(`completed:${payload.id}`, {
         title: item.title || "Remon Download",
         body: this.settings.language === "ar" ? "\u062A\u0645 \u062A\u062D\u0645\u064A\u0644 \u0627\u0644\u0641\u064A\u062F\u064A\u0648 \u0628\u0646\u062C\u0627\u062D" : "Download completed successfully"
-      }, item.thumbnail);
+      }, this.resolveNotificationThumbnail(item));
       return;
     }
     if (payload.status === "failed") {
@@ -2671,7 +2731,7 @@ var NativeNotificationService = class {
       this.sendDownloadOnce(`failed:${payload.id}`, {
         title: item.title || "Remon Download",
         body: this.getFailureNotificationMessage(payload.errorCode, payload.errorMessage)
-      }, item.thumbnail);
+      }, this.resolveNotificationThumbnail(item));
     }
   }
   getFailureNotificationMessage(errorCode, errorMessage) {
@@ -2729,7 +2789,46 @@ var NativeNotificationService = class {
     this.sendDownloadOnce(`scheduled:${schedule.id}:${schedule.triggerCount}`, {
       title: metadata?.title || (this.settings.language === "ar" ? "\u062A\u062D\u0645\u064A\u0644 \u0645\u062C\u062F\u0648\u0644" : "Scheduled Download"),
       body: this.settings.language === "ar" ? "\u062A\u0645\u062A \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u062A\u062D\u0645\u064A\u0644 \u0627\u0644\u0645\u062C\u062F\u0648\u0644 \u0625\u0644\u0649 \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u062A\u0646\u0632\u064A\u0644\u0627\u062A" : "Scheduled download queued"
-    }, metadata?.thumbnail);
+    }, this.resolveVideoThumbnail(metadata?.thumbnail, metadata?.sourceUrl ?? schedule.sourceUrl));
+  }
+  resolveNotificationThumbnail(item) {
+    if (item.thumbnail && /^https?:\/\//i.test(item.thumbnail)) {
+      return item.thumbnail;
+    }
+    const sourceUrl = item.sourceUrl;
+    if (!sourceUrl) {
+      return void 0;
+    }
+    const source = sourceUrl.toLowerCase();
+    const playlistLike = /playlist|list=|index=|&list=|\?list=/i.test(source) || /playlist/i.test(item.id || "") || /playlist/i.test(item.title || "");
+    if (!playlistLike) {
+      return void 0;
+    }
+    try {
+      const videoId = new URL(sourceUrl).searchParams.get("v");
+      return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : void 0;
+    } catch {
+      return void 0;
+    }
+  }
+  resolveVideoThumbnail(thumbnailUrl, sourceUrl) {
+    if (thumbnailUrl && /^https?:\/\//i.test(thumbnailUrl)) {
+      return thumbnailUrl;
+    }
+    if (!sourceUrl) {
+      return void 0;
+    }
+    const source = sourceUrl.toLowerCase();
+    const playlistLike = /playlist|list=|index=|&list=|\?list=/i.test(source);
+    if (!playlistLike) {
+      return void 0;
+    }
+    try {
+      const videoId = new URL(sourceUrl).searchParams.get("v");
+      return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : void 0;
+    } catch {
+      return void 0;
+    }
   }
   sendOnce(key, options) {
     if (this.sentKeys.has(key) || this.pendingKeys.has(key)) {
@@ -2777,7 +2876,7 @@ var NativeNotificationService = class {
         console.warn(`[Notification] Windows notifications are not supported: ${key}`);
         return;
       }
-      const icon = options.icon ? import_electron2.nativeImage.createFromPath(options.icon) : void 0;
+      const icon = options.icon ? this.thumbnailImages.get(options.icon) ?? import_electron2.nativeImage.createFromPath(options.icon) : void 0;
       const notificationOptions = icon ? { ...options, icon } : options;
       const notification = new import_electron2.Notification(notificationOptions);
       if (icon?.isEmpty()) {
@@ -2795,36 +2894,67 @@ var NativeNotificationService = class {
     if (cachedPath) {
       return cachedPath;
     }
-    const response = await fetch(thumbnailUrl, { signal: AbortSignal.timeout(5e3) });
-    if (!response.ok) {
-      throw new Error(`Thumbnail request failed with status ${response.status}`);
+    const thumbnailCandidates = this.getThumbnailCandidates(thumbnailUrl);
+    const thumbnailDirectory = path3.join(import_electron2.app.getPath("temp"), "remon-download-thumbnails");
+    let lastError;
+    for (const candidate of thumbnailCandidates) {
+      try {
+        const response = await fetch(candidate);
+        if (!response.ok) {
+          throw new Error(`Thumbnail request failed with status ${response.status}`);
+        }
+        const imageData = Buffer.from(await response.arrayBuffer());
+        if (imageData.length === 0) {
+          throw new Error("Thumbnail response was empty");
+        }
+        const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+        const extension = contentType.includes("png") ? ".png" : contentType.includes("webp") ? ".webp" : ".jpg";
+        const thumbnailPath = path3.join(
+          thumbnailDirectory,
+          `${(0, import_crypto.createHash)("sha256").update(candidate).digest("hex")}${extension}`
+        );
+        await import_fs3.promises.mkdir(thumbnailDirectory, { recursive: true });
+        await import_fs3.promises.writeFile(thumbnailPath, imageData);
+        if (typeof import_electron2.nativeImage.createFromBuffer === "function") {
+          const image = import_electron2.nativeImage.createFromBuffer(imageData);
+          if (image.isEmpty()) {
+            throw new Error("Thumbnail image could not be decoded");
+          }
+          this.thumbnailImages.set(thumbnailPath, image);
+        }
+        this.thumbnailPaths.set(thumbnailUrl, thumbnailPath);
+        return thumbnailPath;
+      } catch (error) {
+        lastError = error;
+      }
     }
-    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-    const extension = contentType.includes("png") ? ".png" : contentType.includes("webp") ? ".webp" : ".jpg";
-    const thumbnailDirectory = path2.join(import_electron2.app.getPath("temp"), "remon-download-thumbnails");
-    const thumbnailPath = path2.join(
-      thumbnailDirectory,
-      `${(0, import_crypto.createHash)("sha256").update(thumbnailUrl).digest("hex")}${extension}`
-    );
-    try {
-      await import_fs3.promises.access(thumbnailPath);
-    } catch {
-      await import_fs3.promises.mkdir(thumbnailDirectory, { recursive: true });
-      const imageData = Buffer.from(await response.arrayBuffer());
-      await import_fs3.promises.writeFile(thumbnailPath, imageData);
+    throw lastError instanceof Error ? lastError : new Error("Thumbnail unavailable");
+  }
+  getThumbnailCandidates(thumbnailUrl) {
+    const candidates = [thumbnailUrl];
+    const videoIdMatch = thumbnailUrl.match(/\/vi\/([^/]+)/i);
+    if (videoIdMatch?.[1]) {
+      const videoId = videoIdMatch[1];
+      candidates.push(
+        `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
+        `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        `https://i.ytimg.com/vi/${videoId}/default.jpg`
+      );
     }
-    this.thumbnailPaths.set(thumbnailUrl, thumbnailPath);
-    return thumbnailPath;
+    return [...new Set(candidates)];
   }
 };
 
 // electron/tray.ts
 var import_electron3 = require("electron");
-var path3 = __toESM(require("path"), 1);
+var path4 = __toESM(require("path"), 1);
 var tray = null;
 var getIconPath = () => {
-  const applicationPath = typeof import_electron3.app.getAppPath === "function" ? import_electron3.app.getAppPath() : path3.resolve(__dirname, "../..");
-  return path3.join(applicationPath, "icon.png");
+  if (process.resourcesPath && process.defaultApp !== true) {
+    return path4.join(process.resourcesPath, "app.asar", "icon.png");
+  }
+  const applicationPath = typeof import_electron3.app.getAppPath === "function" ? import_electron3.app.getAppPath() : path4.resolve(__dirname, "../..");
+  return path4.join(applicationPath, "icon.png");
 };
 function createTray(mainWindow2) {
   if (tray) {
@@ -2904,6 +3034,9 @@ function destroyTray() {
     console.log("[Tray] Tray destroyed");
   }
 }
+function hasTray() {
+  return tray !== null;
+}
 
 // electron/ipc/handlers.ts
 function wrapSuccess(data) {
@@ -2919,14 +3052,14 @@ function wrapError(err) {
   return { success: false, error: errorModel };
 }
 function registerIpcHandlers(options = {}) {
-  const settingsService = new NativeSettingsService();
+  const settingsService2 = new NativeSettingsService();
   const historyService = new NativeHistoryService();
   const favoritesService = new NativeFavoritesService();
   const schedulerService = options.schedulerService ?? new NativeSchedulerService();
   let notificationService = null;
   const initServices = async () => {
     try {
-      await settingsService.initialize();
+      await settingsService2.initialize();
       console.log("[IPC] NativeSettingsService initialized");
     } catch (err) {
       console.error("[IPC] Failed to initialize NativeSettingsService:", err);
@@ -2957,7 +3090,7 @@ function registerIpcHandlers(options = {}) {
   let startQueuedDownloadsPromise = Promise.resolve();
   const startQueuedDownloads = async () => {
     const service = await ensureDownloadService();
-    const settings = await settingsService.get();
+    const settings = await settingsService2.get();
     const items = await service.getAll();
     const activeStatuses = ["downloading", "retrying", "merging", "converting"];
     let availableSlots = Math.max(
@@ -2986,7 +3119,7 @@ function registerIpcHandlers(options = {}) {
   };
   const initDownloadService = async () => {
     try {
-      const settings = await settingsService.get();
+      const settings = await settingsService2.get();
       downloadService = new NativeDownloadService(settings);
       options.onDownloadServiceReady?.(downloadService);
       notificationService = notificationService ?? new NativeNotificationService(settings);
@@ -3050,7 +3183,7 @@ function registerIpcHandlers(options = {}) {
   };
   import_electron4.ipcMain.handle(IPC_CHANNELS.METADATA_ANALYZE, async (_, { url }) => {
     try {
-      const settings = await settingsService.get();
+      const settings = await settingsService2.get();
       const metadataService = new NativeMetadataService(settings.ytdlpPath);
       const data = await metadataService.analyze(url);
       return wrapSuccess(data);
@@ -3144,7 +3277,7 @@ function registerIpcHandlers(options = {}) {
   });
   import_electron4.ipcMain.handle(IPC_CHANNELS.SETTINGS_GET, async () => {
     try {
-      const data = await settingsService.get();
+      const data = await settingsService2.get();
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -3152,11 +3285,15 @@ function registerIpcHandlers(options = {}) {
   });
   import_electron4.ipcMain.handle(IPC_CHANNELS.SETTINGS_UPDATE, async (_, { settings }) => {
     try {
-      const data = await settingsService.update(settings);
+      const data = await settingsService2.update(settings);
       if (downloadService) {
         downloadService.updateSettings(data);
       }
       notificationService?.updateSettings(data);
+      const focusedWindow = import_electron4.BrowserWindow.getFocusedWindow();
+      if (focusedWindow) {
+        options.onMinimizeToTrayChanged?.(data.minimizeToTray, focusedWindow);
+      }
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -3164,11 +3301,15 @@ function registerIpcHandlers(options = {}) {
   });
   import_electron4.ipcMain.handle(IPC_CHANNELS.SETTINGS_RESET, async () => {
     try {
-      const data = await settingsService.reset();
+      const data = await settingsService2.reset();
       if (downloadService) {
         downloadService.updateSettings(data);
       }
       notificationService?.updateSettings(data);
+      const focusedWindow = import_electron4.BrowserWindow.getFocusedWindow();
+      if (focusedWindow) {
+        options.onMinimizeToTrayChanged?.(data.minimizeToTray, focusedWindow);
+      }
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -3198,7 +3339,7 @@ function registerIpcHandlers(options = {}) {
         return wrapSuccess(null);
       }
       const folderPath = result.filePaths[0];
-      const updatedSettings = await settingsService.update({ downloadFolder: folderPath });
+      const updatedSettings = await settingsService2.update({ downloadFolder: folderPath });
       if (downloadService) {
         downloadService.updateSettings(updatedSettings);
       }
@@ -3222,9 +3363,9 @@ function registerIpcHandlers(options = {}) {
     }
     return folderPath;
   }
-  import_electron4.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_OPEN_FOLDER, async (_, { path: path5 }) => {
+  import_electron4.ipcMain.handle(IPC_CHANNELS.DOWNLOAD_OPEN_FOLDER, async (_, { path: path6 }) => {
     try {
-      const folderPath = resolveDownloadFolderPath(path5 ?? "");
+      const folderPath = resolveDownloadFolderPath(path6 ?? "");
       await import_electron4.shell.openPath(folderPath);
       return wrapSuccess(void 0);
     } catch (err) {
@@ -3330,11 +3471,11 @@ function registerIpcHandlers(options = {}) {
   import_electron4.ipcMain.handle(IPC_CHANNELS.SCHEDULER_TICK, async (_, { now }) => {
     try {
       const data = await schedulerService.tick(now);
-      const settings = await settingsService.get();
+      const settings = await settingsService2.get();
       notificationService = notificationService ?? new NativeNotificationService(settings);
       notificationService.updateSettings(settings);
       data.triggered.forEach(({ schedule, metadata }) => {
-        notificationService?.notifyScheduledDownload(schedule, metadata);
+        notificationService?.notifyScheduledDownload(schedule, metadata[0]);
       });
       return wrapSuccess(data);
     } catch (err) {
@@ -3434,40 +3575,55 @@ var SchedulerBackgroundLoop = class {
       this.tickInFlight = false;
     }
   }
-  async executeTriggeredTask(schedule, metadata) {
+  async executeTriggeredTask(schedule, metadataItems) {
     const downloadService = this.getDownloadService();
     if (!downloadService) {
       this.logger.warn(`[Main] scheduler task skipped because download service is unavailable: ${schedule.id}`);
       return;
     }
     this.attachDownloadListener(downloadService);
-    const itemId = `${schedule.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const item = {
-      id: itemId,
-      metadataId: metadata.id,
-      thumbnail: metadata.thumbnail,
-      title: metadata.title,
-      sourceUrl: metadata.sourceUrl,
-      quality: "auto",
-      format: "mp4",
-      fileSize: metadata.fileSize,
-      downloadedSize: 0,
-      speed: 0,
-      eta: "--",
-      progress: 0,
-      status: "queued",
-      order: 0,
-      addedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      phaseStartedAt: Date.now(),
-      lastUpdatedAt: Date.now(),
-      retryCount: 0
-    };
-    this.logger.log(`[Main] scheduled download started: ${item.id} for ${schedule.id}`);
-    await downloadService.add(item);
-    this.scheduledDownloadIds.set(item.id, { schedule, item });
-    this.getNotificationService()?.notifyScheduledDownload(schedule, metadata);
-    await downloadService.start(item.id);
-    this.logger.log(`[Main] scheduled task completed: ${schedule.id}`);
+    this.getNotificationService()?.notifyScheduledDownload(schedule, metadataItems[0]);
+    for (const metadata of metadataItems) {
+      const itemId = `${schedule.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const item = {
+        id: itemId,
+        metadataId: metadata.id,
+        thumbnail: metadata.thumbnail,
+        title: metadata.title,
+        sourceUrl: metadata.sourceUrl,
+        quality: "auto",
+        format: "mp4",
+        fileSize: metadata.fileSize,
+        downloadedSize: 0,
+        speed: 0,
+        eta: "--",
+        progress: 0,
+        status: "queued",
+        order: 0,
+        addedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        phaseStartedAt: Date.now(),
+        lastUpdatedAt: Date.now(),
+        retryCount: 0
+      };
+      this.logger.log(`[Main] scheduled download started: ${item.id} for ${schedule.id}`);
+      await downloadService.add(item);
+      this.scheduledDownloadIds.set(item.id, { schedule, item });
+      try {
+        await downloadService.start(item.id);
+        const tracked = this.scheduledDownloadIds.get(item.id);
+        if (tracked) {
+          tracked.item = { ...tracked.item, status: "downloading" };
+          this.scheduledDownloadIds.set(item.id, tracked);
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message === "Concurrent download limit reached") {
+          this.logger.log(`[Main] scheduled download queued until a slot is available: ${item.id}`);
+          continue;
+        }
+        throw error;
+      }
+    }
+    this.logger.log(`[Main] scheduled task completed: ${schedule.id} (${metadataItems.length} item(s))`);
   }
   attachDownloadListener(downloadService) {
     if (this.downloadListenerAttached || typeof downloadService.on !== "function") {
@@ -3489,6 +3645,7 @@ var SchedulerBackgroundLoop = class {
         lastUpdatedAt: Date.now()
       };
       this.getNotificationService()?.handleDownloadStateChange(payload, updatedItem);
+      void this.startNextQueuedDownload(downloadService);
       void this.schedulerService.update({
         ...trackedDownload.schedule,
         status: payload.status === "completed" ? "completed" : "failed",
@@ -3498,6 +3655,23 @@ var SchedulerBackgroundLoop = class {
     });
     this.downloadListenerAttached = true;
   }
+  async startNextQueuedDownload(downloadService) {
+    const queued = Array.from(this.scheduledDownloadIds.entries()).find(([, tracked2]) => tracked2.item.status === "queued");
+    if (!queued) {
+      return;
+    }
+    const [itemId, tracked] = queued;
+    try {
+      await downloadService.start(itemId);
+      tracked.item = { ...tracked.item, status: "downloading" };
+      this.scheduledDownloadIds.set(itemId, tracked);
+      this.logger.log(`[Main] started queued scheduled download: ${itemId}`);
+    } catch (error) {
+      if (!(error instanceof Error && error.message === "Concurrent download limit reached")) {
+        this.logger.error(`[Main] queued scheduled download failed to start: ${itemId}`, error);
+      }
+    }
+  }
 };
 
 // electron/main.ts
@@ -3506,7 +3680,13 @@ var sharedSchedulerService = new NativeSchedulerService();
 var nativeDownloadService = null;
 var nativeNotificationService = null;
 var schedulerLoop = null;
-var appIconPath = path4.resolve(__dirname, "../../icon.png");
+var minimizeToTrayEnabled = false;
+var settingsService = new NativeSettingsService();
+var appIconPath = process.resourcesPath && process.defaultApp !== true ? path5.join(process.resourcesPath, "app.asar", "icon.png") : path5.resolve(__dirname, "../../icon.png");
+import_electron5.app.setName("Remon Download");
+if (process.platform === "win32") {
+  import_electron5.app.setAppUserModelId("com.remon.download");
+}
 function createWindow() {
   mainWindow = new import_electron5.BrowserWindow({
     width: 1200,
@@ -3518,7 +3698,7 @@ function createWindow() {
     autoHideMenuBar: true,
     titleBarStyle: "default",
     webPreferences: {
-      preload: path4.join(__dirname, "preload.cjs"),
+      preload: path5.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -3526,8 +3706,8 @@ function createWindow() {
     }
   });
   if (!schedulerLoop) {
-    const settingsService = new NativeSettingsService();
-    void settingsService.initialize();
+    const settingsService2 = new NativeSettingsService();
+    void settingsService2.initialize();
     void sharedSchedulerService.initialize();
     schedulerLoop = new SchedulerBackgroundLoop({
       schedulerService: sharedSchedulerService,
@@ -3587,6 +3767,14 @@ function createWindow() {
     },
     onNotificationServiceReady: (service) => {
       nativeNotificationService = service;
+    },
+    onMinimizeToTrayChanged: (enabled, window) => {
+      minimizeToTrayEnabled = enabled;
+      if (enabled && !hasTray()) {
+        createTray(window);
+      } else if (!enabled && hasTray()) {
+        destroyTray();
+      }
     }
   });
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
@@ -3594,11 +3782,20 @@ function createWindow() {
     void mainWindow.loadURL(devServerUrl);
   } else {
     void mainWindow.loadFile(
-      path4.join(__dirname, "../dist/index.html")
+      path5.join(__dirname, "../../dist/index.html")
     );
   }
+  mainWindow.on("minimize", (event) => {
+    if (mainWindow && minimizeToTrayEnabled) {
+      if (typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      hideWindow(mainWindow);
+      console.log("[Main] Window minimize intercepted, hiding to tray");
+    }
+  });
   mainWindow.on("close", (event) => {
-    if (mainWindow) {
+    if (mainWindow && minimizeToTrayEnabled) {
       event.preventDefault();
       hideWindow(mainWindow);
       console.log("[Main] Window close intercepted, hiding to tray");
@@ -3608,10 +3805,12 @@ function createWindow() {
     mainWindow = null;
   });
 }
-import_electron5.app.whenReady().then(() => {
+import_electron5.app.whenReady().then(async () => {
   import_electron5.app.setAppUserModelId("com.remon.download");
+  const settings = await settingsService.get();
+  minimizeToTrayEnabled = settings.minimizeToTray;
   createWindow();
-  if (mainWindow) {
+  if (mainWindow && minimizeToTrayEnabled) {
     createTray(mainWindow);
   }
   import_electron5.app.on("activate", () => {
@@ -3626,7 +3825,9 @@ import_electron5.app.whenReady().then(() => {
   });
 });
 import_electron5.app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
+  if (process.platform !== "darwin" && !minimizeToTrayEnabled) {
+    import_electron5.app.quit();
+  } else if (process.platform !== "darwin") {
     console.log(
       "[Main] All windows closed, but app continues running (tray still active)"
     );

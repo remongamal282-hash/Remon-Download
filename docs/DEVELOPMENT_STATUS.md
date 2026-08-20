@@ -6,6 +6,10 @@ Phase 3.2 — System Tray Integration (COMPLETE ✅ - Manual Verification Passed
 Current Version:
 1.2.0-system-tray (FINAL RELEASE)
 
+## Phase 3.5 — Windows Installer & Packaging (IN PROGRESS)
+
+Configured electron-builder with NSIS as the official Windows installer and Portable as an optional target. The package includes bundled yt-dlp and FFmpeg runtime files outside `app.asar`, while persistent user data remains under Electron `userData`. Focused runtime and production build checks pass; full-suite and manual Installer E2E remain open verification items.
+
 ## Phase 1 — React Prototype (COMPLETED ✅)
 
 Completed:

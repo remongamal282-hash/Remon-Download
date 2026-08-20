@@ -14,6 +14,7 @@ interface RegisterIpcHandlersOptions {
   schedulerService?: NativeSchedulerService;
   onDownloadServiceReady?: (service: NativeDownloadService) => void;
   onNotificationServiceReady?: (service: NativeNotificationService) => void;
+  onMinimizeToTrayChanged?: (enabled: boolean, window: BrowserWindow) => void;
 }
 
 function wrapSuccess<T>(data: T): IpcResult<T> {
@@ -313,6 +314,10 @@ export function registerIpcHandlers(options: RegisterIpcHandlersOptions = {}): v
         downloadService.updateSettings(data);
       }
       notificationService?.updateSettings(data);
+      const focusedWindow = BrowserWindow.getFocusedWindow();
+      if (focusedWindow) {
+        options.onMinimizeToTrayChanged?.(data.minimizeToTray, focusedWindow);
+      }
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -326,6 +331,10 @@ export function registerIpcHandlers(options: RegisterIpcHandlersOptions = {}): v
         downloadService.updateSettings(data);
       }
       notificationService?.updateSettings(data);
+      const focusedWindow = BrowserWindow.getFocusedWindow();
+      if (focusedWindow) {
+        options.onMinimizeToTrayChanged?.(data.minimizeToTray, focusedWindow);
+      }
       return wrapSuccess(data);
     } catch (err) {
       return wrapError(err);
@@ -520,7 +529,7 @@ export function registerIpcHandlers(options: RegisterIpcHandlersOptions = {}): v
       notificationService = notificationService ?? new NativeNotificationService(settings);
       notificationService.updateSettings(settings);
       data.triggered.forEach(({ schedule, metadata }) => {
-        notificationService?.notifyScheduledDownload(schedule, metadata);
+        notificationService?.notifyScheduledDownload(schedule, metadata[0]);
       });
       return wrapSuccess(data);
     } catch (err) {

@@ -32,6 +32,7 @@
 
 import { spawn as nodeSpawn, type ChildProcess } from "child_process";
 import { access as fsAccess, constants as fsConstants } from "fs/promises";
+import * as path from "path";
 import type {
   AnalysisResult,
   ChannelMetadata,
@@ -165,6 +166,7 @@ export function classifyYouTubeUrl(url: string): LinkType {
 
 interface YtdlpRawVideo {
   id?: string;
+  url?: string;
   webpage_url?: string;
   title?: string;
   uploader?: string;
@@ -201,6 +203,17 @@ interface YtdlpRawPlaylist {
 
 type YtdlpRawOutput = YtdlpRawVideo | YtdlpRawPlaylist;
 
+function bundledYtdlpCandidates(): string[] {
+  const candidates: string[] = [];
+  if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, "runtime", "yt-dlp.exe"));
+  }
+  if (process.defaultApp === true) {
+    candidates.push(path.resolve(__dirname, "../../runtime/yt-dlp.exe"));
+  }
+  return candidates;
+}
+
 // ─── Metadata Parsers ───────────────────────────────────────────────────────
 
 function formatDuration(seconds?: number): string {
@@ -229,10 +242,14 @@ function extractThumbnail(
 function parseVideoMetadata(
   raw: YtdlpRawVideo,
   linkType: VideoLinkType,
-  index = 1
+  index = 1,
+  sourceUrl?: string
 ): VideoMetadata {
   const videoId = raw.id ?? `unknown-${index}`;
   const formats = raw.formats ?? [];
+  const thumbnail = extractThumbnail(raw) || (videoId !== `unknown-${index}`
+    ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+    : "");
 
   // Extract available quality options
   const heights = new Set<number>();
@@ -282,9 +299,11 @@ function parseVideoMetadata(
 
   return {
     id: `yt-${linkType}-${videoId}`,
-    sourceUrl: raw.webpage_url ?? "",
+    sourceUrl: raw.webpage_url ?? sourceUrl ?? (videoId !== `unknown-${index}`
+      ? `https://www.youtube.com/watch?v=${videoId}`
+      : ""),
     linkType,
-    thumbnail: extractThumbnail(raw),
+    thumbnail,
     title: raw.title ?? "Unknown Title",
     channelName: raw.uploader ?? raw.channel ?? "Unknown Channel",
     duration: formatDuration(raw.duration),
@@ -317,12 +336,11 @@ function parsePlaylistMetadata(
   const playlistId = raw.id ?? "unknown-playlist";
   const entries = raw.entries ?? [];
 
-  // Parse first 10 videos for playlist preview
   const videos = entries
-    .slice(0, 10)
-    .map((entry, index) =>
-      parseVideoMetadata(entry, "playlist-video", index + 1)
-    );
+    .map((entry, index) => {
+      const entryUrl = entry.url?.startsWith("http") ? entry.url : undefined;
+      return parseVideoMetadata(entry, "playlist-video", index + 1, entryUrl);
+    });
 
   return {
     id: `yt-playlist-${playlistId}`,
@@ -395,6 +413,15 @@ export class NativeMetadataService {
       }
     }
 
+    for (const candidate of bundledYtdlpCandidates()) {
+      try {
+        await this.executor.checkAccess(candidate, fsConstants.X_OK);
+        return candidate;
+      } catch {
+        // Try the next bundled or PATH candidate.
+      }
+    }
+
     // Priority 2: System PATH (try common names)
     const candidates = [
       "yt-dlp",
@@ -446,9 +473,7 @@ export class NativeMetadataService {
       const args = [
         "--dump-single-json",
         isPlaylist ? "--yes-playlist" : "--no-playlist",
-        ...(isPlaylist
-          ? ["--flat-playlist", "--playlist-items", "1-5"]
-          : []), // Only first 5 videos for fast preview
+        ...(isPlaylist ? ["--flat-playlist"] : []),
         "--skip-download",
         "--no-warnings",
         url

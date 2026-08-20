@@ -203,6 +203,11 @@ export class ElectronDownloadService implements DownloadService {
     return item;
   }
 
+  async remove(id: string): Promise<void> {
+    await window.electronAPI!.download.remove(id);
+    this.itemsCache.delete(id);
+  }
+
   createFromHistoryItem(item: HistoryItem, order: number): DownloadItem {
     const now = Date.now();
     const downloadItem: DownloadItem = {

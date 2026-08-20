@@ -6,6 +6,7 @@ import { assertTransition } from "../utils/stateMachine";
 
 export interface DownloadService {
   createFromMetadata(metadata: VideoMetadata, order: number, quality: string, format: string): DownloadItem;
+  remove(id: string): Promise<void>;
   createFromHistoryItem(item: HistoryItem, order: number): DownloadItem;
   createFromFavoriteItem(item: FavoriteItem, order: number, quality: string, format: string): DownloadItem;
   transition(item: DownloadItem, status: DownloadStatus, now: number): DownloadItem;
@@ -18,6 +19,10 @@ export interface DownloadService {
 }
 
 export class MockDownloadService implements DownloadService {
+  async remove(_id: string): Promise<void> {
+    // Mock downloads are owned by the renderer queue store.
+  }
+
   createFromMetadata(metadata: VideoMetadata, order: number, quality: string, format: string): DownloadItem {
     const now = Date.now();
 

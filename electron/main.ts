@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Menu } from "electron";
 import * as path from "path";
 import { registerIpcHandlers } from "./ipc/handlers";
-import { createTray, destroyTray, showWindow, hideWindow, minimizeToTray } from "./tray";
+import { createTray, destroyTray, showWindow, hideWindow, hasTray } from "./tray";
 import { SchedulerBackgroundLoop } from "./schedulerBackground";
 import { NativeSchedulerService } from "./services/nativeSchedulerService";
 import { NativeSettingsService } from "./services/nativeSettingsService";
@@ -13,8 +13,18 @@ const sharedSchedulerService = new NativeSchedulerService();
 let nativeDownloadService: NativeDownloadService | null = null;
 let nativeNotificationService: NativeNotificationService | null = null;
 let schedulerLoop: SchedulerBackgroundLoop | null = null;
+let minimizeToTrayEnabled = false;
+const settingsService = new NativeSettingsService();
 
-const appIconPath = path.resolve(__dirname, "../../icon.png");
+const appIconPath = process.resourcesPath && process.defaultApp !== true
+  ? path.join(process.resourcesPath, "app.asar", "icon.png")
+  : path.resolve(__dirname, "../../icon.png");
+
+// Set the Windows toast identity before any window or notification service is created.
+app.setName("Remon Download");
+if (process.platform === "win32") {
+  app.setAppUserModelId("com.remon.download");
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -114,6 +124,14 @@ function createWindow(): void {
     },
     onNotificationServiceReady: (service) => {
       nativeNotificationService = service;
+    },
+    onMinimizeToTrayChanged: (enabled, window) => {
+      minimizeToTrayEnabled = enabled;
+      if (enabled && !hasTray()) {
+        createTray(window);
+      } else if (!enabled && hasTray()) {
+        destroyTray();
+      }
     }
   });
 
@@ -123,14 +141,24 @@ function createWindow(): void {
     void mainWindow.loadURL(devServerUrl);
   } else {
     void mainWindow.loadFile(
-      path.join(__dirname, "../dist/index.html")
+      path.join(__dirname, "../../dist/index.html")
     );
   }
+
+  mainWindow.on("minimize", (event) => {
+    if (mainWindow && minimizeToTrayEnabled) {
+      if (typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      hideWindow(mainWindow);
+      console.log("[Main] Window minimize intercepted, hiding to tray");
+    }
+  });
 
   // Handle close: hide to tray instead of closing
   // This prevents the entire application from closing when user clicks X
   mainWindow.on("close", (event) => {
-    if (mainWindow) {
+    if (mainWindow && minimizeToTrayEnabled) {
       event.preventDefault();
       hideWindow(mainWindow);
       console.log("[Main] Window close intercepted, hiding to tray");
@@ -142,13 +170,15 @@ function createWindow(): void {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   app.setAppUserModelId("com.remon.download");
+  const settings = await settingsService.get();
+  minimizeToTrayEnabled = settings.minimizeToTray;
 
   createWindow();
 
   // Create system tray after window is created
-  if (mainWindow) {
+  if (mainWindow && minimizeToTrayEnabled) {
     createTray(mainWindow);
   }
 
@@ -168,10 +198,9 @@ app.whenReady().then(() => {
 
 // Handle the event when user tries to close all windows
 app.on("window-all-closed", () => {
-  // On Windows, don't quit the app when all windows are closed
-  // because the tray is still active and the app is still working
-  // Only quit when user explicitly selects Quit from the tray menu
-  if (process.platform !== "darwin") {
+  if (process.platform !== "darwin" && !minimizeToTrayEnabled) {
+    app.quit();
+  } else if (process.platform !== "darwin") {
     console.log(
       "[Main] All windows closed, but app continues running (tray still active)"
     );

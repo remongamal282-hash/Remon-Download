@@ -394,6 +394,23 @@ describe("NativeMetadataService — yt-dlp Integration", () => {
     });
   });
 
+  it("derives a YouTube thumbnail when a playlist entry has no thumbnail", async () => {
+    mockExecutor.setSpawnBehavior(() => createSuccessProcess(JSON.stringify({
+      id: "PLxxxxxx",
+      title: "Playlist",
+      entries: [{ id: "video-without-thumbnail", title: "Video" }]
+    })));
+    mockExecutor.setAccessBehavior(async () => { /* File exists */ });
+
+    const service = new NativeMetadataService("yt-dlp", mockExecutor);
+    const result = await service.analyze("https://www.youtube.com/playlist?list=PLxxxxxx");
+
+    expect(result.linkType).toBe("playlist");
+    if (result.linkType === "playlist") {
+      expect(result.videos[0]?.thumbnail).toBe("https://i.ytimg.com/vi/video-without-thumbnail/hqdefault.jpg");
+    }
+  });
+
   describe("Channel URL", () => {
     beforeEach(() => {
       mockExecutor.setAccessBehavior(async () => {

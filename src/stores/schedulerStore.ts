@@ -115,7 +115,7 @@ export const useSchedulerStore = create<SchedulerState>((set, get) => ({
 
         seenTriggeredScheduleIds.add(identityKey);
 
-        useQueueStore.getState().addFromMetadata(
+        useQueueStore.getState().addManyFromMetadata(
           triggered.metadata,
           settings.defaultQuality,
           settings.defaultVideoFormat

@@ -46,6 +46,17 @@ export interface ProcessExecutor {
   ): Promise<void>;
 }
 
+function bundledRuntimeCandidates(fileName: string): string[] {
+  const candidates: string[] = [];
+  if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, "runtime", fileName));
+  }
+  if (process.defaultApp === true) {
+    candidates.push(path.resolve(__dirname, "../../runtime", fileName));
+  }
+  return candidates;
+}
+
 /**
  * Default ProcessExecutor using Node.js built-ins
  */
@@ -151,6 +162,15 @@ export class NativeDownloadService extends EventEmitter {
       }
     }
 
+    for (const candidate of bundledRuntimeCandidates("yt-dlp.exe")) {
+      try {
+        await this.executor.checkAccess(candidate, fsConstants.X_OK);
+        return candidate;
+      } catch {
+        // Try the next bundled or PATH candidate.
+      }
+    }
+
     // Priority 2: System PATH
     const candidates = [
       "yt-dlp",
@@ -192,13 +212,31 @@ export class NativeDownloadService extends EventEmitter {
     throw new Error("ytdlp_not_found");
   }
 
+  private async resolveBundledFfmpegDirectory(): Promise<string | null> {
+    const ffmpegPaths = bundledRuntimeCandidates("ffmpeg.exe");
+    const ffprobePaths = bundledRuntimeCandidates("ffprobe.exe");
+
+    for (let index = 0; index < ffmpegPaths.length; index += 1) {
+      try {
+        await this.executor.checkAccess(ffmpegPaths[index], fsConstants.X_OK);
+        await this.executor.checkAccess(ffprobePaths[index], fsConstants.X_OK);
+        return path.dirname(ffmpegPaths[index]);
+      } catch {
+        // Try the next bundled location.
+      }
+    }
+
+    return null;
+  }
+
   /**
    * Builds yt-dlp arguments array for download
    */
   private buildYtdlpArgs(
     item: DownloadItem,
     outputPath: string,
-    isResume: boolean
+    isResume: boolean,
+    ffmpegDirectory: string | null
   ): string[] {
     const args: string[] = [];
 
@@ -273,13 +311,11 @@ export class NativeDownloadService extends EventEmitter {
     }
 
     // FFmpeg location
-    if (
-      this.settings.ffmpegPath &&
-      this.settings.ffmpegPath.trim()
-    ) {
+    const ffmpegLocation = this.settings.ffmpegPath.trim() || ffmpegDirectory;
+    if (ffmpegLocation) {
       args.push(
         "--ffmpeg-location",
-        this.settings.ffmpegPath
+        ffmpegLocation
       );
     }
 
@@ -318,6 +354,8 @@ export class NativeDownloadService extends EventEmitter {
     args.push("--no-warnings");
 
     // URL - always last and passed as separate argument.
+    // Playlist entries must be downloaded individually; never expand a playlist here.
+    args.push("--no-playlist");
     args.push(item.sourceUrl);
 
     return args;
@@ -1042,6 +1080,8 @@ export class NativeDownloadService extends EventEmitter {
         await this.resolveYtdlpPath();
     }
 
+    const ffmpegDirectory = await this.resolveBundledFfmpegDirectory();
+
     // Build output path.
     const fileName =
       `${item.title.replace(
@@ -1174,7 +1214,8 @@ export class NativeDownloadService extends EventEmitter {
       this.buildYtdlpArgs(
         item,
         outputPath,
-        canResume
+        canResume,
+        ffmpegDirectory
       );
 
     console.log(
