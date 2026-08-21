@@ -14,6 +14,7 @@ let nativeDownloadService: NativeDownloadService | null = null;
 let nativeNotificationService: NativeNotificationService | null = null;
 let schedulerLoop: SchedulerBackgroundLoop | null = null;
 let minimizeToTrayEnabled = false;
+let isQuitting = false;
 const settingsService = new NativeSettingsService();
 
 function ensureTray(window: BrowserWindow | null): boolean {
@@ -43,6 +44,19 @@ function hideToTray(window: BrowserWindow | null, event?: { preventDefault?: () 
   event?.preventDefault?.();
   hideWindow(window);
   return true;
+}
+
+function minimizeWindow(window: BrowserWindow | null): void {
+  if (!window) {
+    return;
+  }
+
+  if (minimizeToTrayEnabled) {
+    hideToTray(window);
+    return;
+  }
+
+  window.minimize();
 }
 
 const appIconPath = process.resourcesPath && process.defaultApp !== true
@@ -160,12 +174,18 @@ function createWindow(): void {
 
       if (enabled) {
         ensureTray(targetWindow);
+      } else {
+        destroyTray();
+        targetWindow.setSkipTaskbar(false);
       }
+    },
+    onWindowMinimize: (window) => {
+      minimizeWindow(window);
     }
   });
 
   app.on("browser-window-created", (_, createdWindow) => {
-    createdWindow.on("minimize", (event) => {
+    (createdWindow as any).on("minimize", (event: { preventDefault: () => void }) => {
       if (minimizeToTrayEnabled) {
         if (hideToTray(createdWindow, event)) {
           console.log("[Main] Window minimize intercepted, hiding to tray");
@@ -188,7 +208,7 @@ function createWindow(): void {
     );
   }
 
-  mainWindow.on("minimize", (event) => {
+  (mainWindow as any).on("minimize", (event: { preventDefault: () => void }) => {
     if (mainWindow && minimizeToTrayEnabled) {
       if (hideToTray(mainWindow, event)) {
         console.log("[Main] Window minimize intercepted, hiding to tray");
@@ -202,10 +222,16 @@ function createWindow(): void {
     }
   });
 
+  mainWindow.on("show", () => {
+    if (mainWindow) {
+      mainWindow.setSkipTaskbar(false);
+    }
+  });
+
   // Handle close: hide to tray instead of closing
   // This prevents the entire application from closing when user clicks X
   mainWindow.on("close", (event) => {
-    if (mainWindow && minimizeToTrayEnabled) {
+    if (mainWindow && minimizeToTrayEnabled && !isQuitting) {
       if (hideToTray(mainWindow, event)) {
         console.log("[Main] Window close intercepted, hiding to tray");
       }
@@ -224,8 +250,8 @@ app.whenReady().then(async () => {
 
   createWindow();
 
-  // Keep the tray entry available so a hidden window can always be restored.
-  if (mainWindow) {
+  // Create a tray entry only when the user enabled minimize-to-tray.
+  if (mainWindow && minimizeToTrayEnabled) {
     ensureTray(mainWindow);
   }
 
@@ -233,7 +259,7 @@ app.whenReady().then(async () => {
     if (mainWindow === null) {
       createWindow();
 
-      if (mainWindow) {
+      if (mainWindow && minimizeToTrayEnabled) {
         ensureTray(mainWindow);
       }
     } else {
@@ -262,6 +288,7 @@ app.on("window-all-closed", () => {
 
 // Clean up tray before quitting
 app.on("before-quit", () => {
+  isQuitting = true;
   console.log("[Main] App is quitting, destroying tray...");
 
   if (schedulerLoop) {

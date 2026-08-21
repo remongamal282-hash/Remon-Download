@@ -21,15 +21,22 @@ function setSkipTaskbar(mainWindow: BrowserWindow, skip: boolean): void {
 }
 
 const getIconPath = (): string => {
-  const candidates = process.resourcesPath && process.defaultApp !== true
-    ? [
+  const appPath = typeof app.getAppPath === "function"
+    ? app.getAppPath()
+    : path.resolve(__dirname, "../..");
+  const candidates = [
+    path.join(appPath, "icon.png"),
+    path.join(appPath, "icon.ico"),
+    path.join(process.cwd(), "icon.png"),
+    path.join(process.cwd(), "icon.ico")
+  ];
+
+  if (process.resourcesPath && process.defaultApp !== true) {
+    candidates.push(
       path.join(process.resourcesPath, "app.asar", "icon.ico"),
       path.join(process.resourcesPath, "app.asar", "icon.png")
-    ]
-    : [
-      path.join(typeof app.getAppPath === "function" ? app.getAppPath() : path.resolve(__dirname, "../.."), "icon.ico"),
-      path.join(typeof app.getAppPath === "function" ? app.getAppPath() : path.resolve(__dirname, "../.."), "icon.png")
-    ];
+    );
+  }
 
   const iconPath = candidates.find((candidate) => fs.existsSync(candidate));
   return iconPath ?? candidates[0];
@@ -57,12 +64,15 @@ export function createTray(mainWindow: BrowserWindow): Tray {
       throw new Error(`Tray icon could not be decoded: ${iconPath}`);
     }
 
-    const icon = sourceIcon.resize({ width: 32, height: 32 });
+    const icon = sourceIcon.resize({ width: 16, height: 16 });
     if (icon.isEmpty()) {
       throw new Error(`Tray icon could not be loaded: ${iconPath}`);
     }
     tray = new Tray(icon);
-    console.log(`[Tray] Icon ready: ${icon.getSize().width}x${icon.getSize().height}`);
+    if (typeof tray.setImage === "function") {
+      tray.setImage(icon);
+    }
+    console.log("[Tray] Icon ready");
 
     // Set the tooltip
     tray.setToolTip("Remon Download");

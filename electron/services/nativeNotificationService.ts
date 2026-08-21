@@ -235,9 +235,8 @@ export class NativeNotificationService {
         return;
       }
 
-      const icon = options.icon
-        ? (this.thumbnailImages.get(options.icon) ?? nativeImage.createFromPath(options.icon))
-        : undefined;
+      const iconPath = options.icon ?? path.join(app.getAppPath(), "icon.png");
+      const icon = this.thumbnailImages.get(iconPath) ?? nativeImage.createFromPath(iconPath);
       const notificationOptions = icon ? { ...options, icon } : options;
       const notification = new Notification(notificationOptions);
       if (icon?.isEmpty()) {

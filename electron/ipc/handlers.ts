@@ -15,6 +15,7 @@ interface RegisterIpcHandlersOptions {
   onDownloadServiceReady?: (service: NativeDownloadService) => void;
   onNotificationServiceReady?: (service: NativeNotificationService) => void;
   onMinimizeToTrayChanged?: (enabled: boolean, window: BrowserWindow) => void;
+  onWindowMinimize?: (window: BrowserWindow) => void;
 }
 
 function wrapSuccess<T>(data: T): IpcResult<T> {
@@ -344,7 +345,7 @@ export function registerIpcHandlers(options: RegisterIpcHandlersOptions = {}): v
   ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, async () => {
     const focusedWindow = BrowserWindow.getFocusedWindow();
     if (focusedWindow) {
-      focusedWindow.minimize();
+      options.onWindowMinimize?.(focusedWindow);
     }
     return wrapSuccess(undefined);
   });

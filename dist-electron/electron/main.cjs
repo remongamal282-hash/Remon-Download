@@ -144,13 +144,12 @@ function classifyYouTubeUrl(url) {
 }
 function bundledYtdlpCandidates() {
   const candidates = [];
-  const projectRuntime = path.resolve(process.cwd(), "runtime", "yt-dlp.exe");
-  const repoRuntime = path.resolve(__dirname, "../../runtime/yt-dlp.exe");
   if (process.resourcesPath) {
     candidates.push(path.join(process.resourcesPath, "runtime", "yt-dlp.exe"));
   }
-  candidates.push(projectRuntime);
-  candidates.push(repoRuntime);
+  if (process.defaultApp === true) {
+    candidates.push(path.resolve(__dirname, "../../runtime/yt-dlp.exe"));
+  }
   return Array.from(new Set(candidates.filter(Boolean)));
 }
 function formatDuration(seconds) {
@@ -2913,7 +2912,8 @@ var NativeNotificationService = class {
         console.warn(`[Notification] Windows notifications are not supported: ${key}`);
         return;
       }
-      const icon = options.icon ? this.thumbnailImages.get(options.icon) ?? import_electron2.nativeImage.createFromPath(options.icon) : void 0;
+      const iconPath = options.icon ?? path3.join(import_electron2.app.getAppPath(), "icon.png");
+      const icon = this.thumbnailImages.get(iconPath) ?? import_electron2.nativeImage.createFromPath(iconPath);
       const notificationOptions = icon ? { ...options, icon } : options;
       const notification = new import_electron2.Notification(notificationOptions);
       if (icon?.isEmpty()) {
@@ -2993,13 +2993,19 @@ function setSkipTaskbar(mainWindow2, skip) {
   }
 }
 var getIconPath = () => {
-  const candidates = process.resourcesPath && process.defaultApp !== true ? [
-    path4.join(process.resourcesPath, "app.asar", "icon.ico"),
-    path4.join(process.resourcesPath, "app.asar", "icon.png")
-  ] : [
-    path4.join(typeof import_electron3.app.getAppPath === "function" ? import_electron3.app.getAppPath() : path4.resolve(__dirname, "../.."), "icon.ico"),
-    path4.join(typeof import_electron3.app.getAppPath === "function" ? import_electron3.app.getAppPath() : path4.resolve(__dirname, "../.."), "icon.png")
+  const appPath2 = typeof import_electron3.app.getAppPath === "function" ? import_electron3.app.getAppPath() : path4.resolve(__dirname, "../..");
+  const candidates = [
+    path4.join(appPath2, "icon.png"),
+    path4.join(appPath2, "icon.ico"),
+    path4.join(process.cwd(), "icon.png"),
+    path4.join(process.cwd(), "icon.ico")
   ];
+  if (process.resourcesPath && process.defaultApp !== true) {
+    candidates.push(
+      path4.join(process.resourcesPath, "app.asar", "icon.ico"),
+      path4.join(process.resourcesPath, "app.asar", "icon.png")
+    );
+  }
   const iconPath = candidates.find((candidate) => fs4.existsSync(candidate));
   return iconPath ?? candidates[0];
 };
@@ -3018,12 +3024,15 @@ function createTray(mainWindow2) {
     if (sourceIcon.isEmpty()) {
       throw new Error(`Tray icon could not be decoded: ${iconPath}`);
     }
-    const icon = sourceIcon.resize({ width: 32, height: 32 });
+    const icon = sourceIcon.resize({ width: 16, height: 16 });
     if (icon.isEmpty()) {
       throw new Error(`Tray icon could not be loaded: ${iconPath}`);
     }
     tray = new import_electron3.Tray(icon);
-    console.log(`[Tray] Icon ready: ${icon.getSize().width}x${icon.getSize().height}`);
+    if (typeof tray.setImage === "function") {
+      tray.setImage(icon);
+    }
+    console.log("[Tray] Icon ready");
     tray.setToolTip("Remon Download");
     const contextMenu = import_electron3.Menu.buildFromTemplate([
       {
@@ -3376,7 +3385,7 @@ function registerIpcHandlers(options = {}) {
   import_electron4.ipcMain.handle(IPC_CHANNELS.WINDOW_MINIMIZE, async () => {
     const focusedWindow = import_electron4.BrowserWindow.getFocusedWindow();
     if (focusedWindow) {
-      focusedWindow.minimize();
+      options.onWindowMinimize?.(focusedWindow);
     }
     return wrapSuccess(void 0);
   });
@@ -3739,6 +3748,7 @@ var nativeDownloadService = null;
 var nativeNotificationService = null;
 var schedulerLoop = null;
 var minimizeToTrayEnabled = false;
+var isQuitting = false;
 var settingsService = new NativeSettingsService();
 function ensureTray(window) {
   if (!window) {
@@ -3763,6 +3773,16 @@ function hideToTray(window, event) {
   event?.preventDefault?.();
   hideWindow(window);
   return true;
+}
+function minimizeWindow(window) {
+  if (!window) {
+    return;
+  }
+  if (minimizeToTrayEnabled) {
+    hideToTray(window);
+    return;
+  }
+  window.minimize();
 }
 var appIconPath = process.resourcesPath && process.defaultApp !== true ? path5.join(process.resourcesPath, "app.asar", "icon.png") : path5.resolve(__dirname, "../../icon.png");
 import_electron5.app.setName("Remon Download");
@@ -3855,7 +3875,13 @@ function createWindow() {
       const targetWindow = window ?? mainWindow ?? import_electron5.BrowserWindow.getAllWindows()[0] ?? null;
       if (enabled) {
         ensureTray(targetWindow);
+      } else {
+        destroyTray();
+        targetWindow.setSkipTaskbar(false);
       }
+    },
+    onWindowMinimize: (window) => {
+      minimizeWindow(window);
     }
   });
   import_electron5.app.on("browser-window-created", (_, createdWindow) => {
@@ -3890,8 +3916,13 @@ function createWindow() {
       mainWindow.setSkipTaskbar(false);
     }
   });
+  mainWindow.on("show", () => {
+    if (mainWindow) {
+      mainWindow.setSkipTaskbar(false);
+    }
+  });
   mainWindow.on("close", (event) => {
-    if (mainWindow && minimizeToTrayEnabled) {
+    if (mainWindow && minimizeToTrayEnabled && !isQuitting) {
       if (hideToTray(mainWindow, event)) {
         console.log("[Main] Window close intercepted, hiding to tray");
       }
@@ -3906,13 +3937,13 @@ import_electron5.app.whenReady().then(async () => {
   const settings = await settingsService.get();
   minimizeToTrayEnabled = settings.minimizeToTray;
   createWindow();
-  if (mainWindow) {
+  if (mainWindow && minimizeToTrayEnabled) {
     ensureTray(mainWindow);
   }
   import_electron5.app.on("activate", () => {
     if (mainWindow === null) {
       createWindow();
-      if (mainWindow) {
+      if (mainWindow && minimizeToTrayEnabled) {
         ensureTray(mainWindow);
       }
     } else {
@@ -3935,6 +3966,7 @@ import_electron5.app.on("window-all-closed", () => {
   }
 });
 import_electron5.app.on("before-quit", () => {
+  isQuitting = true;
   console.log("[Main] App is quitting, destroying tray...");
   if (schedulerLoop) {
     schedulerLoop.stop();

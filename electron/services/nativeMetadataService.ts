@@ -206,15 +206,13 @@ type YtdlpRawOutput = YtdlpRawVideo | YtdlpRawPlaylist;
 function bundledYtdlpCandidates(): string[] {
   const candidates: string[] = [];
 
-  const projectRuntime = path.resolve(process.cwd(), "runtime", "yt-dlp.exe");
-  const repoRuntime = path.resolve(__dirname, "../../runtime/yt-dlp.exe");
-
   if (process.resourcesPath) {
     candidates.push(path.join(process.resourcesPath, "runtime", "yt-dlp.exe"));
   }
 
-  candidates.push(projectRuntime);
-  candidates.push(repoRuntime);
+  if (process.defaultApp === true) {
+    candidates.push(path.resolve(__dirname, "../../runtime/yt-dlp.exe"));
+  }
 
   return Array.from(new Set(candidates.filter(Boolean)));
 }
