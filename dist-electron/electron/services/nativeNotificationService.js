@@ -35,14 +35,11 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.NativeNotificationService = void 0;
 const electron_1 = require("electron");
-const crypto_1 = require("crypto");
-const fs_1 = require("fs");
 const path = __importStar(require("path"));
 class NativeNotificationService {
     constructor(settings) {
         this.sentKeys = new Set();
         this.pendingKeys = new Set();
-        this.thumbnailPaths = new Map();
         this.settings = settings;
     }
     updateSettings(settings) {
@@ -63,8 +60,9 @@ class NativeNotificationService {
                 title: item.title || "Remon Download",
                 body: this.settings.language === "ar"
                     ? "تم تحميل الفيديو بنجاح"
-                    : "Download completed successfully"
-            }, item.thumbnail);
+                    : "Download completed successfully",
+                thumbnail: item.thumbnail
+            });
             return;
         }
         if (payload.status === "failed") {
@@ -75,7 +73,7 @@ class NativeNotificationService {
             this.sendDownloadOnce(`failed:${payload.id}`, {
                 title: item.title || "Remon Download",
                 body: this.getFailureNotificationMessage(payload.errorCode, payload.errorMessage)
-            }, item.thumbnail);
+            });
         }
     }
     getFailureNotificationMessage(errorCode, errorMessage) {
@@ -131,11 +129,12 @@ class NativeNotificationService {
             return;
         }
         this.sendDownloadOnce(`scheduled:${schedule.id}:${schedule.triggerCount}`, {
-            title: metadata?.title || (this.settings.language === "ar" ? "تحميل مجدول" : "Scheduled Download"),
+            title: metadata?.title || "Remon Download",
             body: this.settings.language === "ar"
                 ? "تمت إضافة التحميل المجدول إلى قائمة التنزيلات"
-                : "Scheduled download queued"
-        }, metadata?.thumbnail);
+                : "Scheduled download queued",
+            thumbnail: metadata?.thumbnail
+        });
     }
     sendOnce(key, options) {
         if (this.sentKeys.has(key) || this.pendingKeys.has(key)) {
@@ -147,82 +146,89 @@ class NativeNotificationService {
                 console.warn(`[Notification] Windows notifications are not supported: ${key}`);
                 return;
             }
-            const notification = new electron_1.Notification(options);
-            notification.show();
-            this.sentKeys.add(key);
-            console.log(`[Notification] Shown: ${key}`);
+            this.pendingKeys.add(key);
+            void this.showNotification(key, options);
         }
         catch (error) {
             console.error(`[Notification] Failed to show notification (${key}):`, error);
         }
     }
-    sendDownloadOnce(key, options, thumbnailUrl) {
-        if (!thumbnailUrl || !/^https?:\/\//i.test(thumbnailUrl)) {
-            this.sendOnce(key, options);
-            return;
-        }
-        if (this.sentKeys.has(key) || this.pendingKeys.has(key)) {
-            console.log(`[Notification] Duplicate suppressed: ${key}`);
-            return;
-        }
-        this.pendingKeys.add(key);
-        void this.resolveThumbnailPath(thumbnailUrl)
-            .then((icon) => {
-            this.pendingKeys.delete(key);
-            this.showNotification(key, { ...options, icon });
-        })
-            .catch((error) => {
-            this.pendingKeys.delete(key);
-            console.warn(`[Notification] Thumbnail unavailable for ${key}:`, error);
-            this.sendOnce(key, options);
-        });
+    sendDownloadOnce(key, options) {
+        this.sendOnce(key, options);
     }
     showNotification(key, options) {
         if (this.sentKeys.has(key)) {
-            return;
+            return Promise.resolve();
         }
-        try {
-            if (!electron_1.Notification.isSupported()) {
-                console.warn(`[Notification] Windows notifications are not supported: ${key}`);
-                return;
+        return (async () => {
+            try {
+                if (!electron_1.Notification.isSupported()) {
+                    console.warn(`[Notification] Windows notifications are not supported: ${key}`);
+                    return;
+                }
+                if (process.platform === "win32" && typeof electron_1.app.setAppUserModelId === "function") {
+                    electron_1.app.setAppUserModelId("com.remon.download");
+                }
+                const appRoot = typeof electron_1.app.getAppPath === "function" ? electron_1.app.getAppPath() : process.cwd();
+                const appIconCandidates = [
+                    path.join(appRoot, "icon.ico"),
+                    path.join(appRoot, "icon.png"),
+                    path.join(process.cwd(), "icon.ico"),
+                    path.join(process.cwd(), "icon.png"),
+                    ...(process.resourcesPath ? [
+                        path.join(process.resourcesPath, "app.asar", "icon.ico"),
+                        path.join(process.resourcesPath, "app.asar", "icon.png"),
+                        path.join(process.resourcesPath, "icon.ico"),
+                        path.join(process.resourcesPath, "icon.png")
+                    ] : [])
+                ];
+                let iconImage;
+                if (options.thumbnail) {
+                    try {
+                        const response = await fetch(options.thumbnail);
+                        if (response.ok) {
+                            const image = electron_1.nativeImage.createFromBuffer(Buffer.from(await response.arrayBuffer()));
+                            if (!image.isEmpty()) {
+                                iconImage = image;
+                            }
+                        }
+                    }
+                    catch (error) {
+                        console.warn(`[Notification] Could not load thumbnail for ${key}:`, error);
+                    }
+                }
+                for (const candidate of appIconCandidates) {
+                    if (iconImage) {
+                        break;
+                    }
+                    try {
+                        const img = electron_1.nativeImage.createFromPath(candidate);
+                        if (!img.isEmpty()) {
+                            iconImage = img;
+                            break;
+                        }
+                    }
+                    catch {
+                        // continue
+                    }
+                }
+                const notificationOptions = {
+                    title: options.title,
+                    body: options.body,
+                    ...(iconImage && !iconImage.isEmpty() ? { icon: iconImage } : {})
+                };
+                const notification = new electron_1.Notification(notificationOptions);
+                notification.show();
+                this.sentKeys.add(key);
+                console.log(`[Notification] Shown: ${key}`);
             }
-            const icon = options.icon ? electron_1.nativeImage.createFromPath(options.icon) : undefined;
-            const notificationOptions = icon ? { ...options, icon } : options;
-            const notification = new electron_1.Notification(notificationOptions);
-            if (icon?.isEmpty()) {
-                console.warn(`[Notification] Thumbnail image is empty: ${options.icon}`);
+            catch (error) {
+                console.error(`[Notification] Failed to show notification (${key}):`, error);
             }
-            notification.show();
-            this.sentKeys.add(key);
-            console.log(`[Notification] Shown: ${key}${options.icon ? " with thumbnail" : ""}`);
-        }
-        catch (error) {
-            console.error(`[Notification] Failed to show notification (${key}):`, error);
-        }
-    }
-    async resolveThumbnailPath(thumbnailUrl) {
-        const cachedPath = this.thumbnailPaths.get(thumbnailUrl);
-        if (cachedPath) {
-            return cachedPath;
-        }
-        const response = await fetch(thumbnailUrl, { signal: AbortSignal.timeout(5000) });
-        if (!response.ok) {
-            throw new Error(`Thumbnail request failed with status ${response.status}`);
-        }
-        const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-        const extension = contentType.includes("png") ? ".png" : contentType.includes("webp") ? ".webp" : ".jpg";
-        const thumbnailDirectory = path.join(electron_1.app.getPath("temp"), "remon-download-thumbnails");
-        const thumbnailPath = path.join(thumbnailDirectory, `${(0, crypto_1.createHash)("sha256").update(thumbnailUrl).digest("hex")}${extension}`);
-        try {
-            await fs_1.promises.access(thumbnailPath);
-        }
-        catch {
-            await fs_1.promises.mkdir(thumbnailDirectory, { recursive: true });
-            const imageData = Buffer.from(await response.arrayBuffer());
-            await fs_1.promises.writeFile(thumbnailPath, imageData);
-        }
-        this.thumbnailPaths.set(thumbnailUrl, thumbnailPath);
-        return thumbnailPath;
+            finally {
+                this.pendingKeys.delete(key);
+            }
+        })();
     }
 }
 exports.NativeNotificationService = NativeNotificationService;

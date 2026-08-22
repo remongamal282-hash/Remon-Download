@@ -222,11 +222,17 @@ class NativeSchedulerService {
         const fallbackTitle = `Scheduled Download ${triggerNumber}`;
         try {
             const analyzed = await new nativeMetadataService_1.NativeMetadataService().analyze(schedule.sourceUrl);
+            if (analyzed.linkType === 'playlist') {
+                return analyzed.videos.map((video, index) => ({
+                    ...video,
+                    id: `scheduled-${schedule.id}-${triggerNumber}-${index + 1}`,
+                }));
+            }
             if (analyzed.linkType === 'video' || analyzed.linkType === 'shorts' || analyzed.linkType === 'playlist-video') {
-                return {
-                    ...analyzed,
-                    id: `scheduled-${schedule.id}-${triggerNumber}`,
-                };
+                return [{
+                        ...analyzed,
+                        id: `scheduled-${schedule.id}-${triggerNumber}`,
+                    }];
             }
         }
         catch {
@@ -262,28 +268,28 @@ class NativeSchedulerService {
             }
             return 'https://picsum.photos/seed/remon-scheduled/320/180';
         })();
-        return {
-            id: `scheduled-${schedule.id}-${triggerNumber}`,
-            sourceUrl: schedule.sourceUrl,
-            linkType: 'video',
-            thumbnail,
-            title,
-            channelName: 'Scheduled Queue',
-            duration: '10:24',
-            views: 128000,
-            qualityOptions: ['2160p', '1440p', '1080p', '720p', '480p'],
-            videoFormats: ['mp4', 'webm', 'mkv'],
-            audioFormats: ['mp3', 'opus'],
-            resolution: '1080p',
-            fps: 60,
-            videoCodec: 'H.264',
-            audioCodec: 'AAC',
-            videoBitrate: '7.8 Mbps',
-            audioBitrate: '192 Kbps',
-            container: 'mp4',
-            fileSize: 220 * 1024 * 1024,
-            uploadDate: '2026-08-01',
-        };
+        return [{
+                id: `scheduled-${schedule.id}-${triggerNumber}`,
+                sourceUrl: schedule.sourceUrl,
+                linkType: 'video',
+                thumbnail,
+                title,
+                channelName: 'Scheduled Queue',
+                duration: '10:24',
+                views: 128000,
+                qualityOptions: ['2160p', '1440p', '1080p', '720p', '480p'],
+                videoFormats: ['mp4', 'webm', 'mkv'],
+                audioFormats: ['mp3', 'opus'],
+                resolution: '1080p',
+                fps: 60,
+                videoCodec: 'H.264',
+                audioCodec: 'AAC',
+                videoBitrate: '7.8 Mbps',
+                audioBitrate: '192 Kbps',
+                container: 'mp4',
+                fileSize: 220 * 1024 * 1024,
+                uploadDate: '2026-08-01',
+            }];
     }
 }
 exports.NativeSchedulerService = NativeSchedulerService;

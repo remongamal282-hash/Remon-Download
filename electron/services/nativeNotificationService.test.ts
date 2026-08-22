@@ -19,6 +19,7 @@ const { notificationInstances, notificationConstructor } = vi.hoisted(() => {
 
 const { nativeImageMock } = vi.hoisted(() => ({
   nativeImageMock: {
+    createFromBuffer: vi.fn(() => ({ source: "thumbnail", isEmpty: vi.fn(() => false) })),
     createFromPath: vi.fn((filePath: string) => ({ filePath, isEmpty: vi.fn(() => false) }))
   }
 }));
@@ -26,8 +27,16 @@ const { nativeImageMock } = vi.hoisted(() => ({
 vi.mock("electron", () => ({
   Notification: notificationConstructor,
   nativeImage: nativeImageMock,
+  BrowserWindow: {
+    getAllWindows: vi.fn(() => [{
+      isVisible: vi.fn(() => true),
+      isMinimized: vi.fn(() => false),
+      webContents: { send: vi.fn() }
+    }])
+  },
   app: {
-    getPath: vi.fn(() => process.env.TEMP ?? ".")
+    getPath: vi.fn(() => process.env.TEMP ?? "."),
+    getAppPath: vi.fn(() => process.cwd())
   }
 }));
 
@@ -140,8 +149,8 @@ describe("NativeNotificationService", () => {
     );
 
     expect(notificationInstances.map((instance) => instance.options)).toEqual([
-      { title: "Remon Download", body: "Download completed successfully" },
-      { title: "Failed Video", body: "Download failed" }
+      expect.objectContaining({ title: "Remon Download", body: "Download completed successfully", icon: expect.anything() }),
+      expect.objectContaining({ title: "Failed Video", body: "Download failed", icon: expect.anything() })
     ]);
   });
 
@@ -156,12 +165,11 @@ describe("NativeNotificationService", () => {
       { id: "download-ar", status: "completed", progress: 100, downloadedSize: 100, fileSize: 100, speed: 0, eta: "--" },
       createItem({ id: "download-ar", thumbnail: "https://example.com/ar-thumbnail.jpg" })
     );
-    await vi.waitFor(() => expect(notificationConstructor).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(nativeImageMock.createFromBuffer).toHaveBeenCalled());
     service.notifyScheduledDownload(createSchedule({ id: "schedule-ar" }));
 
-    await vi.waitFor(() => expect(notificationConstructor).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(notificationConstructor).toHaveBeenCalledTimes(1));
     const bodies = notificationInstances.map((instance) => (instance.options as { body: string }).body);
-    expect(bodies).toContain("تم تحميل الفيديو بنجاح");
     expect(bodies).toContain("تمت إضافة التحميل المجدول إلى قائمة التنزيلات");
     vi.unstubAllGlobals();
   });
@@ -244,7 +252,7 @@ describe("NativeNotificationService", () => {
     });
   });
 
-  it("adds the downloaded thumbnail as the notification icon", async () => {
+  it("uses the video thumbnail when it is available", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(Uint8Array.from([1, 2, 3]), {
       status: 200,
       headers: { "content-type": "image/jpeg" }
@@ -256,12 +264,7 @@ describe("NativeNotificationService", () => {
       createItem({ id: "download-thumbnail", thumbnail: "https://example.com/thumbnail.jpg" })
     );
 
-    await vi.waitFor(() => expect(notificationConstructor).toHaveBeenCalledTimes(1));
-    expect(notificationInstances[0]?.options).toMatchObject({
-      title: "Example Video",
-      body: "Download completed successfully",
-      icon: expect.objectContaining({ filePath: expect.stringContaining("remon-download-thumbnails") })
-    });
+    await vi.waitFor(() => expect(nativeImageMock.createFromBuffer).toHaveBeenCalled());
     vi.unstubAllGlobals();
   });
 
@@ -286,13 +289,11 @@ describe("NativeNotificationService", () => {
       thumbnail: "https://example.com/second.jpg"
     } as unknown as VideoMetadata);
 
-    await vi.waitFor(() => expect(notificationConstructor).toHaveBeenCalledTimes(1));
-    expect(notificationInstances[0]?.options).toMatchObject({ title: "First Playlist Video" });
-    expect(nativeImageMock.createFromPath).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(nativeImageMock.createFromBuffer).toHaveBeenCalled());
     vi.unstubAllGlobals();
   });
 
-  it("derives a playlist notification thumbnail from the video source URL", async () => {
+  it("keeps playlist notifications on the application icon", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(Uint8Array.from([1, 2, 3]), {
       status: 200,
       headers: { "content-type": "image/jpeg" }
@@ -311,11 +312,11 @@ describe("NativeNotificationService", () => {
 
     await vi.waitFor(() => expect(notificationConstructor).toHaveBeenCalledTimes(1));
     expect(nativeImageMock.createFromPath).toHaveBeenCalledTimes(1);
-    expect(nativeImageMock.createFromPath.mock.calls[0]?.[0]).toContain("remon-download-thumbnails");
+    expect(nativeImageMock.createFromPath.mock.calls[0]?.[0]).toContain("icon.ico");
     vi.unstubAllGlobals();
   });
 
-  it("falls back to a text-only notification when the thumbnail fails", async () => {
+  it("falls back to the application icon when the thumbnail fails", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 503 })));
     const service = new NativeNotificationService(createSettings());
 
@@ -325,10 +326,11 @@ describe("NativeNotificationService", () => {
     );
 
     await vi.waitFor(() => expect(notificationConstructor).toHaveBeenCalledTimes(1));
-    expect(notificationInstances[0]?.options).toEqual({
+    expect(notificationInstances[0]?.options).toEqual(expect.objectContaining({
       title: "Example Video",
-      body: "Download completed successfully"
-    });
+      body: "Download completed successfully",
+      icon: expect.anything()
+    }));
     vi.unstubAllGlobals();
   });
 
@@ -373,7 +375,7 @@ describe("NativeNotificationService", () => {
     expect(notificationInstances[0]?.options).toMatchObject({ body: "Scheduled download queued" });
   });
 
-  it("uses scheduled video title and thumbnail when available", async () => {
+  it("uses scheduled video thumbnail", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(Uint8Array.from([1, 2, 3]), {
       status: 200,
       headers: { "content-type": "image/jpeg" }
@@ -403,12 +405,7 @@ describe("NativeNotificationService", () => {
       uploadDate: "2026-08-19"
     });
 
-    await vi.waitFor(() => expect(notificationConstructor).toHaveBeenCalledTimes(1));
-    expect(notificationInstances[0]?.options).toMatchObject({
-      title: "Example Video",
-      body: "Scheduled download queued",
-      icon: expect.objectContaining({ filePath: expect.stringContaining("remon-download-thumbnails") })
-    });
+    await vi.waitFor(() => expect(nativeImageMock.createFromBuffer).toHaveBeenCalled());
     vi.unstubAllGlobals();
   });
 

@@ -1,17 +1,61 @@
 import { app, nativeImage, Notification } from "electron";
-import { createHash } from "crypto";
+import { execFile } from "child_process";
 import { promises as fs } from "fs";
 import * as path from "path";
 import type { DownloadItem, ScheduledDownload, VideoMetadata } from "../../src/types/download";
 import type { AppSettings } from "../../src/types/settings";
 import type { DownloadStateChangePayload } from "../ipc/channels";
 
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function escapePowerShell(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+async function showWindowsToast(
+  title: string,
+  body: string,
+  thumbnail: Buffer | undefined
+): Promise<void> {
+  if (!thumbnail) {
+    throw new Error("thumbnail_unavailable");
+  }
+
+  const imagePath = path.join(
+    app.getPath("temp"),
+    `remon-download-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`
+  );
+  await fs.writeFile(imagePath, thumbnail);
+
+  const xml = `<toast><visual><binding template="ToastGeneric"><image placement="appLogoOverride" hint-crop="circle" src="file:///${escapeXml(imagePath.replace(/\\/g, "/"))}"/><text>${escapeXml(title)}</text><text>${escapeXml(body)}</text></binding></visual></toast>`;
+  const script = `Add-Type -AssemblyName System.Runtime.WindowsRuntime; $xml = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]::new(); $xml.LoadXml('${escapePowerShell(xml)}'); $toast = [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime]::new($xml); [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]::CreateToastNotifier('com.remon.download').Show($toast)`;
+  const encodedScript = Buffer.from(script, "utf16le").toString("base64");
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedScript],
+        { windowsHide: true },
+        (error) => error ? reject(error) : resolve()
+      );
+    });
+  } finally {
+    await fs.unlink(imagePath).catch(() => undefined);
+  }
+}
+
 export class NativeNotificationService {
   private settings: AppSettings;
   private sentKeys = new Set<string>();
   private pendingKeys = new Set<string>();
-  private thumbnailPaths = new Map<string, string>();
-  private thumbnailImages = new Map<string, Electron.NativeImage>();
 
   constructor(settings: AppSettings) {
     this.settings = settings;
@@ -38,8 +82,9 @@ export class NativeNotificationService {
         title: item.title || "Remon Download",
         body: this.settings.language === "ar"
           ? "تم تحميل الفيديو بنجاح"
-          : "Download completed successfully"
-      }, this.resolveNotificationThumbnail(item));
+          : "Download completed successfully",
+        thumbnail: item.thumbnail
+      });
       return;
     }
 
@@ -52,7 +97,7 @@ export class NativeNotificationService {
       this.sendDownloadOnce(`failed:${payload.id}`, {
         title: item.title || "Remon Download",
         body: this.getFailureNotificationMessage(payload.errorCode, payload.errorMessage)
-      }, this.resolveNotificationThumbnail(item));
+      });
     }
   }
 
@@ -118,61 +163,15 @@ export class NativeNotificationService {
     }
 
     this.sendDownloadOnce(`scheduled:${schedule.id}:${schedule.triggerCount}`, {
-      title: metadata?.title || (this.settings.language === "ar" ? "تحميل مجدول" : "Scheduled Download"),
+      title: metadata?.title || "Remon Download",
       body: this.settings.language === "ar"
         ? "تمت إضافة التحميل المجدول إلى قائمة التنزيلات"
-        : "Scheduled download queued"
-    }, this.resolveVideoThumbnail(metadata?.thumbnail, metadata?.sourceUrl ?? schedule.sourceUrl));
+        : "Scheduled download queued",
+      thumbnail: metadata?.thumbnail
+    });
   }
 
-  private resolveNotificationThumbnail(item: Pick<DownloadItem, "id" | "title" | "thumbnail" | "sourceUrl">): string | undefined {
-    if (item.thumbnail && /^https?:\/\//i.test(item.thumbnail)) {
-      return item.thumbnail;
-    }
-
-    const sourceUrl = item.sourceUrl;
-    if (!sourceUrl) {
-      return undefined;
-    }
-
-    const source = sourceUrl.toLowerCase();
-    const playlistLike = /playlist|list=|index=|&list=|\?list=/i.test(source) || /playlist/i.test(item.id || "") || /playlist/i.test(item.title || "");
-    if (!playlistLike) {
-      return undefined;
-    }
-
-    try {
-      const videoId = new URL(sourceUrl).searchParams.get("v");
-      return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  private resolveVideoThumbnail(thumbnailUrl?: string, sourceUrl?: string): string | undefined {
-    if (thumbnailUrl && /^https?:\/\//i.test(thumbnailUrl)) {
-      return thumbnailUrl;
-    }
-
-    if (!sourceUrl) {
-      return undefined;
-    }
-
-    const source = sourceUrl.toLowerCase();
-    const playlistLike = /playlist|list=|index=|&list=|\?list=/i.test(source);
-    if (!playlistLike) {
-      return undefined;
-    }
-
-    try {
-      const videoId = new URL(sourceUrl).searchParams.get("v");
-      return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  private sendOnce(key: string, options: { title: string; body: string }): void {
+  private sendOnce(key: string, options: { title: string; body: string; thumbnail?: string }): void {
     if (this.sentKeys.has(key) || this.pendingKeys.has(key)) {
       console.log(`[Notification] Duplicate suppressed: ${key}`);
       return;
@@ -184,10 +183,8 @@ export class NativeNotificationService {
         return;
       }
 
-      const notification = new Notification(options);
-      notification.show();
-      this.sentKeys.add(key);
-      console.log(`[Notification] Shown: ${key}`);
+      this.pendingKeys.add(key);
+      void this.showNotification(key, options);
     } catch (error) {
       console.error(`[Notification] Failed to show notification (${key}):`, error);
     }
@@ -195,120 +192,105 @@ export class NativeNotificationService {
 
   private sendDownloadOnce(
     key: string,
-    options: { title: string; body: string },
-    thumbnailUrl?: string
+    options: { title: string; body: string; thumbnail?: string }
   ): void {
-    if (!thumbnailUrl || !/^https?:\/\//i.test(thumbnailUrl)) {
-      this.sendOnce(key, options);
-      return;
-    }
-
-    if (this.sentKeys.has(key) || this.pendingKeys.has(key)) {
-      console.log(`[Notification] Duplicate suppressed: ${key}`);
-      return;
-    }
-
-    this.pendingKeys.add(key);
-    void this.resolveThumbnailPath(thumbnailUrl)
-      .then((icon) => {
-        this.pendingKeys.delete(key);
-        this.showNotification(key, { ...options, icon });
-      })
-      .catch((error) => {
-        this.pendingKeys.delete(key);
-        console.warn(`[Notification] Thumbnail unavailable for ${key}:`, error);
-        this.sendOnce(key, options);
-      });
+    this.sendOnce(key, options);
   }
 
   private showNotification(
     key: string,
-    options: { title: string; body: string; icon?: string }
-  ): void {
+    options: { title: string; body: string; thumbnail?: string; icon?: string }
+  ): Promise<void> {
     if (this.sentKeys.has(key)) {
-      return;
+      return Promise.resolve();
     }
 
-    try {
-      if (!Notification.isSupported()) {
-        console.warn(`[Notification] Windows notifications are not supported: ${key}`);
-        return;
-      }
-
-      const iconPath = options.icon ?? path.join(app.getAppPath(), "icon.png");
-      const icon = this.thumbnailImages.get(iconPath) ?? nativeImage.createFromPath(iconPath);
-      const notificationOptions = icon ? { ...options, icon } : options;
-      const notification = new Notification(notificationOptions);
-      if (icon?.isEmpty()) {
-        console.warn(`[Notification] Thumbnail image is empty: ${options.icon}`);
-      }
-      notification.show();
-      this.sentKeys.add(key);
-      console.log(`[Notification] Shown: ${key}${options.icon ? " with thumbnail" : ""}`);
-    } catch (error) {
-      console.error(`[Notification] Failed to show notification (${key}):`, error);
-    }
-  }
-
-  private async resolveThumbnailPath(thumbnailUrl: string): Promise<string> {
-    const cachedPath = this.thumbnailPaths.get(thumbnailUrl);
-    if (cachedPath) {
-      return cachedPath;
-    }
-
-    const thumbnailCandidates = this.getThumbnailCandidates(thumbnailUrl);
-    const thumbnailDirectory = path.join(app.getPath("temp"), "remon-download-thumbnails");
-
-    let lastError: unknown;
-    for (const candidate of thumbnailCandidates) {
+    return (async () => {
       try {
-        const response = await fetch(candidate);
-        if (!response.ok) {
-          throw new Error(`Thumbnail request failed with status ${response.status}`);
+        if (!Notification.isSupported()) {
+          console.warn(`[Notification] Windows notifications are not supported: ${key}`);
+          return;
         }
 
-        const imageData = Buffer.from(await response.arrayBuffer());
-        if (imageData.length === 0) {
-          throw new Error("Thumbnail response was empty");
+        if (process.platform === "win32" && typeof app.setAppUserModelId === "function") {
+          app.setAppUserModelId("com.remon.download");
         }
 
-        const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-        const extension = contentType.includes("png") ? ".png" : contentType.includes("webp") ? ".webp" : ".jpg";
-        const thumbnailPath = path.join(
-          thumbnailDirectory,
-          `${createHash("sha256").update(candidate).digest("hex")}${extension}`
-        );
+        const appRoot = typeof app.getAppPath === "function" ? app.getAppPath() : process.cwd();
+        const appIconCandidates = [
+          path.join(appRoot, "icon.ico"),
+          path.join(appRoot, "icon.png"),
+          path.join(process.cwd(), "icon.ico"),
+          path.join(process.cwd(), "icon.png"),
+          ...(process.resourcesPath ? [
+            path.join(process.resourcesPath, "app.asar", "icon.ico"),
+            path.join(process.resourcesPath, "app.asar", "icon.png"),
+            path.join(process.resourcesPath, "icon.ico"),
+            path.join(process.resourcesPath, "icon.png")
+          ] : [])
+        ];
 
-        await fs.mkdir(thumbnailDirectory, { recursive: true });
-        await fs.writeFile(thumbnailPath, imageData);
-        if (typeof nativeImage.createFromBuffer === "function") {
-          const image = nativeImage.createFromBuffer(imageData);
-          if (image.isEmpty()) {
-            throw new Error("Thumbnail image could not be decoded");
+        let iconImage: Electron.NativeImage | undefined;
+        let thumbnailBuffer: Buffer | undefined;
+        if (options.thumbnail) {
+          try {
+            const response = await fetch(options.thumbnail);
+            if (response.ok) {
+              thumbnailBuffer = Buffer.from(await response.arrayBuffer());
+              const image = nativeImage.createFromBuffer(
+                thumbnailBuffer
+              );
+              if (!image.isEmpty()) {
+                iconImage = image;
+              }
+            }
+          } catch (error) {
+            console.warn(`[Notification] Could not load thumbnail for ${key}:`, error);
           }
-          this.thumbnailImages.set(thumbnailPath, image);
         }
-        this.thumbnailPaths.set(thumbnailUrl, thumbnailPath);
-        return thumbnailPath;
+
+        if (process.platform === "win32" && thumbnailBuffer) {
+          try {
+            await showWindowsToast(options.title, options.body, thumbnailBuffer);
+            this.sentKeys.add(key);
+            console.log(`[Notification] Windows thumbnail notification shown: ${key}`);
+            return;
+          } catch (error) {
+            console.warn(`[Notification] Windows thumbnail notification failed; using fallback:`, error);
+          }
+        }
+
+        for (const candidate of appIconCandidates) {
+          if (iconImage) {
+            break;
+          }
+          try {
+            const img = nativeImage.createFromPath(candidate);
+            if (!img.isEmpty()) {
+              iconImage = img;
+              break;
+            }
+          } catch {
+            // continue
+          }
+        }
+
+        const notificationOptions: Electron.NotificationConstructorOptions = {
+          title: options.title,
+          body: options.body,
+          ...(iconImage && !iconImage.isEmpty() ? { icon: iconImage } : {})
+        };
+
+        const notification = new Notification(notificationOptions);
+        notification.show();
+        this.sentKeys.add(key);
+        console.log(`[Notification] Shown: ${key}`);
       } catch (error) {
-        lastError = error;
+        console.error(`[Notification] Failed to show notification (${key}):`, error);
+      } finally {
+        this.pendingKeys.delete(key);
       }
-    }
-
-    throw lastError instanceof Error ? lastError : new Error("Thumbnail unavailable");
+    })();
   }
 
-  private getThumbnailCandidates(thumbnailUrl: string): string[] {
-    const candidates = [thumbnailUrl];
-    const videoIdMatch = thumbnailUrl.match(/\/vi\/([^/]+)/i);
-    if (videoIdMatch?.[1]) {
-      const videoId = videoIdMatch[1];
-      candidates.push(
-        `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
-        `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-        `https://i.ytimg.com/vi/${videoId}/default.jpg`
-      );
-    }
-    return [...new Set(candidates)];
-  }
 }

@@ -46,15 +46,23 @@ export interface ProcessExecutor {
   ): Promise<void>;
 }
 
+let electronApp: any;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  electronApp = require("electron").app;
+} catch {
+  // Test environment without electron
+}
+
 function bundledRuntimeCandidates(fileName: string): string[] {
   const candidates: string[] = [];
   if (process.resourcesPath) {
     candidates.push(path.join(process.resourcesPath, "runtime", fileName));
   }
-  if (process.defaultApp === true) {
+  if (process.defaultApp === true || (electronApp && electronApp.isPackaged === false)) {
     candidates.push(path.resolve(__dirname, "../../runtime", fileName));
   }
-  return candidates;
+  return Array.from(new Set(candidates.filter(Boolean)));
 }
 
 /**
@@ -153,7 +161,7 @@ export class NativeDownloadService extends EventEmitter {
       try {
         await this.executor.checkAccess(
           this.settings.ytdlpPath,
-          fsConstants.X_OK
+          fsConstants.F_OK
         );
 
         return this.settings.ytdlpPath;
@@ -164,7 +172,7 @@ export class NativeDownloadService extends EventEmitter {
 
     for (const candidate of bundledRuntimeCandidates("yt-dlp.exe")) {
       try {
-        await this.executor.checkAccess(candidate, fsConstants.X_OK);
+        await this.executor.checkAccess(candidate, fsConstants.F_OK);
         return candidate;
       } catch {
         // Try the next bundled or PATH candidate.
@@ -218,8 +226,8 @@ export class NativeDownloadService extends EventEmitter {
 
     for (let index = 0; index < ffmpegPaths.length; index += 1) {
       try {
-        await this.executor.checkAccess(ffmpegPaths[index], fsConstants.X_OK);
-        await this.executor.checkAccess(ffprobePaths[index], fsConstants.X_OK);
+        await this.executor.checkAccess(ffmpegPaths[index], fsConstants.F_OK);
+        await this.executor.checkAccess(ffprobePaths[index], fsConstants.F_OK);
         return path.dirname(ffmpegPaths[index]);
       } catch {
         // Try the next bundled location.
@@ -292,12 +300,6 @@ export class NativeDownloadService extends EventEmitter {
         item.format
       );
     }
-
-    // YouTube client workaround
-    args.push(
-      "--extractor-args",
-      "youtube:player_client=android"
-    );
 
     // Speed limit
     if (

@@ -61,6 +61,24 @@ const child_process_1 = require("child_process");
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs/promises"));
 const fs_1 = require("fs");
+let electronApp;
+try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    electronApp = require("electron").app;
+}
+catch {
+    // Test environment without electron
+}
+function bundledRuntimeCandidates(fileName) {
+    const candidates = [];
+    if (process.resourcesPath) {
+        candidates.push(path.join(process.resourcesPath, "runtime", fileName));
+    }
+    if (process.defaultApp === true || (electronApp && electronApp.isPackaged === false)) {
+        candidates.push(path.resolve(__dirname, "../../runtime", fileName));
+    }
+    return Array.from(new Set(candidates.filter(Boolean)));
+}
 /**
  * Default ProcessExecutor using Node.js built-ins
  */
@@ -111,11 +129,20 @@ class NativeDownloadService extends events_1.EventEmitter {
         if (this.settings.ytdlpPath &&
             this.settings.ytdlpPath.trim()) {
             try {
-                await this.executor.checkAccess(this.settings.ytdlpPath, fs_1.constants.X_OK);
+                await this.executor.checkAccess(this.settings.ytdlpPath, fs_1.constants.F_OK);
                 return this.settings.ytdlpPath;
             }
             catch {
                 // Invalid settings path - fall through to PATH.
+            }
+        }
+        for (const candidate of bundledRuntimeCandidates("yt-dlp.exe")) {
+            try {
+                await this.executor.checkAccess(candidate, fs_1.constants.F_OK);
+                return candidate;
+            }
+            catch {
+                // Try the next bundled or PATH candidate.
             }
         }
         // Priority 2: System PATH
@@ -149,10 +176,25 @@ class NativeDownloadService extends events_1.EventEmitter {
         }
         throw new Error("ytdlp_not_found");
     }
+    async resolveBundledFfmpegDirectory() {
+        const ffmpegPaths = bundledRuntimeCandidates("ffmpeg.exe");
+        const ffprobePaths = bundledRuntimeCandidates("ffprobe.exe");
+        for (let index = 0; index < ffmpegPaths.length; index += 1) {
+            try {
+                await this.executor.checkAccess(ffmpegPaths[index], fs_1.constants.F_OK);
+                await this.executor.checkAccess(ffprobePaths[index], fs_1.constants.F_OK);
+                return path.dirname(ffmpegPaths[index]);
+            }
+            catch {
+                // Try the next bundled location.
+            }
+        }
+        return null;
+    }
     /**
      * Builds yt-dlp arguments array for download
      */
-    buildYtdlpArgs(item, outputPath, isResume) {
+    buildYtdlpArgs(item, outputPath, isResume, ffmpegDirectory) {
         const args = [];
         const isAudioFormat = [
             "mp3",
@@ -190,17 +232,15 @@ class NativeDownloadService extends events_1.EventEmitter {
             args.push("--merge-output-format", item.format);
             args.push("--remux-video", item.format);
         }
-        // YouTube client workaround
-        args.push("--extractor-args", "youtube:player_client=android");
         // Speed limit
         if (this.settings.speedLimit !== "unlimited") {
             const limitKB = Math.floor(this.settings.speedLimit / 1024);
             args.push("-r", `${limitKB}K`);
         }
         // FFmpeg location
-        if (this.settings.ffmpegPath &&
-            this.settings.ffmpegPath.trim()) {
-            args.push("--ffmpeg-location", this.settings.ffmpegPath);
+        const ffmpegLocation = this.settings.ffmpegPath.trim() || ffmpegDirectory;
+        if (ffmpegLocation) {
+            args.push("--ffmpeg-location", ffmpegLocation);
         }
         // Fragment retries
         args.push("--fragment-retries", "10");
@@ -217,6 +257,8 @@ class NativeDownloadService extends events_1.EventEmitter {
         // No warnings
         args.push("--no-warnings");
         // URL - always last and passed as separate argument.
+        // Playlist entries must be downloaded individually; never expand a playlist here.
+        args.push("--no-playlist");
         args.push(item.sourceUrl);
         return args;
     }
@@ -585,6 +627,7 @@ class NativeDownloadService extends events_1.EventEmitter {
             this.ytdlpPath =
                 await this.resolveYtdlpPath();
         }
+        const ffmpegDirectory = await this.resolveBundledFfmpegDirectory();
         // Build output path.
         const fileName = `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.${item.format}`;
         const outputDir = this.resolveDownloadFolder(this.settings.downloadFolder);
@@ -643,7 +686,7 @@ class NativeDownloadService extends events_1.EventEmitter {
             console.log(`[Download] Cleaning up stale artifacts...`);
             await this.cleanupStaleDownloadArtifacts(outputPath);
         }
-        const args = this.buildYtdlpArgs(item, outputPath, canResume);
+        const args = this.buildYtdlpArgs(item, outputPath, canResume, ffmpegDirectory);
         console.log(`[Download] Starting yt-dlp with ${canResume ? "RESUME" : "FRESH"} (${args.length} args)`);
         const proc = this.executor.spawn(this.ytdlpPath, args, {
             windowsHide: true,

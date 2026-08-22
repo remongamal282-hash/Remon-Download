@@ -2,4 +2,6 @@ release/
 dist/
 dist-electron/
 node_modules/
-runtime/  
+runtime/
+release-fixed/
+release-new/

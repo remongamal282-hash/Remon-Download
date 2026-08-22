@@ -25,16 +25,18 @@ const getIconPath = (): string => {
     ? app.getAppPath()
     : path.resolve(__dirname, "../..");
   const candidates = [
-    path.join(appPath, "icon.png"),
     path.join(appPath, "icon.ico"),
-    path.join(process.cwd(), "icon.png"),
-    path.join(process.cwd(), "icon.ico")
+    path.join(appPath, "icon.png"),
+    path.join(process.cwd(), "icon.ico"),
+    path.join(process.cwd(), "icon.png")
   ];
 
   if (process.resourcesPath && process.defaultApp !== true) {
     candidates.push(
       path.join(process.resourcesPath, "app.asar", "icon.ico"),
-      path.join(process.resourcesPath, "app.asar", "icon.png")
+      path.join(process.resourcesPath, "app.asar", "icon.png"),
+      path.join(process.resourcesPath, "icon.ico"),
+      path.join(process.resourcesPath, "icon.png")
     );
   }
 

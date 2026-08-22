@@ -57,7 +57,7 @@ function makeSchedule(overrides = {}) {
         const schedulerService = {
             tick: vitest_1.vi.fn(async () => ({
                 items: [schedule],
-                triggered: [{ schedule, metadata }],
+                triggered: [{ schedule, metadata: [metadata] }],
             })),
         };
         const add = vitest_1.vi.fn(async (item) => item);
@@ -88,8 +88,8 @@ function makeSchedule(overrides = {}) {
         const start = vitest_1.vi.fn(async (id) => ({ id, status: 'downloading' }));
         const schedulerService = {
             tick: vitest_1.vi.fn()
-                .mockResolvedValueOnce({ items: [schedule], triggered: [{ schedule, metadata }] })
-                .mockResolvedValueOnce({ items: [schedule], triggered: [{ schedule, metadata }] })
+                .mockResolvedValueOnce({ items: [schedule], triggered: [{ schedule, metadata: [metadata] }] })
+                .mockResolvedValueOnce({ items: [schedule], triggered: [{ schedule, metadata: [metadata] }] })
         };
         const loop = new schedulerBackground_1.SchedulerBackgroundLoop({
             schedulerService: schedulerService,
@@ -101,6 +101,53 @@ function makeSchedule(overrides = {}) {
         (0, vitest_1.expect)(add).toHaveBeenCalledTimes(1);
         (0, vitest_1.expect)(start).toHaveBeenCalledTimes(1);
         loop.stop();
+    });
+    (0, vitest_1.it)('starts one native download for every scheduled playlist video', async () => {
+        const schedule = makeSchedule({ id: 'sched-playlist', status: 'triggered', triggerCount: 1 });
+        const metadata = [makeMetadata({ id: 'playlist-video-1' }), makeMetadata({ id: 'playlist-video-2' })];
+        const add = vitest_1.vi.fn(async (item) => item);
+        const start = vitest_1.vi.fn(async (id) => ({ id, status: 'downloading' }));
+        const schedulerService = {
+            tick: vitest_1.vi.fn(async () => ({ items: [schedule], triggered: [{ schedule, metadata }] }))
+        };
+        const loop = new schedulerBackground_1.SchedulerBackgroundLoop({
+            schedulerService: schedulerService,
+            getDownloadService: () => ({ add, start }),
+            pollMs: 1000,
+        });
+        await loop.tickOnce(Date.now());
+        (0, vitest_1.expect)(add).toHaveBeenCalledTimes(2);
+        (0, vitest_1.expect)(start).toHaveBeenCalledTimes(2);
+    });
+    (0, vitest_1.it)('queues remaining scheduled playlist videos when the concurrent limit is one', async () => {
+        const schedule = makeSchedule({ id: 'sched-limited', status: 'triggered', triggerCount: 1 });
+        const metadata = [makeMetadata({ id: 'playlist-video-1' }), makeMetadata({ id: 'playlist-video-2' })];
+        const add = vitest_1.vi.fn(async (item) => item);
+        const start = vitest_1.vi.fn()
+            .mockResolvedValueOnce({ id: 'scheduled-1', status: 'downloading' })
+            .mockRejectedValueOnce(new Error('Concurrent download limit reached'))
+            .mockResolvedValueOnce({ id: 'scheduled-2', status: 'downloading' });
+        const schedulerService = {
+            tick: vitest_1.vi.fn(async () => ({ items: [schedule], triggered: [{ schedule, metadata }] })),
+            update: vitest_1.vi.fn(async () => schedule)
+        };
+        const listeners = [];
+        const downloadService = {
+            add,
+            start,
+            on: vitest_1.vi.fn((_event, listener) => listeners.push(listener))
+        };
+        const loop = new schedulerBackground_1.SchedulerBackgroundLoop({
+            schedulerService: schedulerService,
+            getDownloadService: () => downloadService,
+            pollMs: 1000,
+        });
+        await loop.tickOnce(Date.now());
+        (0, vitest_1.expect)(add).toHaveBeenCalledTimes(2);
+        (0, vitest_1.expect)(start).toHaveBeenCalledTimes(2);
+        listeners[0]?.({ id: add.mock.calls[0]?.[0].id, status: 'completed', progress: 100, downloadedSize: 1, fileSize: 1, speed: 0, eta: '--' });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        (0, vitest_1.expect)(start).toHaveBeenCalledTimes(3);
     });
     (0, vitest_1.it)('works without a SchedulerPage and can be stopped cleanly', async () => {
         const schedulerService = {

@@ -13,6 +13,7 @@ const { notificationInstances, notificationConstructor } = vitest_1.vi.hoisted((
 });
 const { nativeImageMock } = vitest_1.vi.hoisted(() => ({
     nativeImageMock: {
+        createFromBuffer: vitest_1.vi.fn(() => ({ source: "thumbnail", isEmpty: vitest_1.vi.fn(() => false) })),
         createFromPath: vitest_1.vi.fn((filePath) => ({ filePath, isEmpty: vitest_1.vi.fn(() => false) }))
     }
 }));
@@ -20,7 +21,8 @@ vitest_1.vi.mock("electron", () => ({
     Notification: notificationConstructor,
     nativeImage: nativeImageMock,
     app: {
-        getPath: vitest_1.vi.fn(() => process.env.TEMP ?? ".")
+        getPath: vitest_1.vi.fn(() => process.env.TEMP ?? "."),
+        getAppPath: vitest_1.vi.fn(() => process.cwd())
     }
 }));
 function createSettings(overrides) {
@@ -111,8 +113,8 @@ function createSchedule(overrides) {
         service.handleDownloadStateChange({ id: "download-1", status: "completed", progress: 100, downloadedSize: 100, fileSize: 100, speed: 0, eta: "--" }, createItem({ title: "" }));
         service.handleDownloadStateChange({ id: "download-2", status: "failed", progress: 0, downloadedSize: 0, fileSize: 100, speed: 0, eta: "--" }, createItem({ id: "download-2", title: "Failed Video", status: "failed" }));
         (0, vitest_1.expect)(notificationInstances.map((instance) => instance.options)).toEqual([
-            { title: "Remon Download", body: "Download completed successfully" },
-            { title: "Failed Video", body: "Download failed" }
+            vitest_1.expect.objectContaining({ title: "Remon Download", body: "Download completed successfully", icon: vitest_1.expect.anything() }),
+            vitest_1.expect.objectContaining({ title: "Failed Video", body: "Download failed", icon: vitest_1.expect.anything() })
         ]);
     });
     (0, vitest_1.it)("localizes completion and scheduled notifications in Arabic", async () => {
@@ -184,7 +186,7 @@ function createSchedule(overrides) {
             body: "فشل تحميل الفيديو بسبب خطأ في الشبكة"
         });
     });
-    (0, vitest_1.it)("adds the downloaded thumbnail as the notification icon", async () => {
+    (0, vitest_1.it)("uses the video thumbnail when it is available", async () => {
         vitest_1.vi.stubGlobal("fetch", vitest_1.vi.fn(async () => new Response(Uint8Array.from([1, 2, 3]), {
             status: 200,
             headers: { "content-type": "image/jpeg" }
@@ -195,19 +197,63 @@ function createSchedule(overrides) {
         (0, vitest_1.expect)(notificationInstances[0]?.options).toMatchObject({
             title: "Example Video",
             body: "Download completed successfully",
-            icon: vitest_1.expect.objectContaining({ filePath: vitest_1.expect.stringContaining("remon-download-thumbnails") })
+            icon: vitest_1.expect.objectContaining({ source: "thumbnail" })
         });
         vitest_1.vi.unstubAllGlobals();
     });
-    (0, vitest_1.it)("falls back to a text-only notification when the thumbnail fails", async () => {
+    (0, vitest_1.it)("uses one scheduled playlist notification for the playlist", async () => {
+        vitest_1.vi.stubGlobal("fetch", vitest_1.vi.fn(async () => new Response(Uint8Array.from([1, 2, 3]), {
+            status: 200,
+            headers: { "content-type": "image/jpeg" }
+        })));
+        const service = new nativeNotificationService_1.NativeNotificationService(createSettings());
+        const schedule = createSchedule({ id: "schedule-playlist", triggerCount: 1 });
+        service.notifyScheduledDownload(schedule, {
+            ...createItem(),
+            id: "playlist-video-1",
+            title: "First Playlist Video",
+            thumbnail: "https://example.com/first.jpg"
+        });
+        service.notifyScheduledDownload(schedule, {
+            ...createItem(),
+            id: "playlist-video-2",
+            title: "Second Playlist Video",
+            thumbnail: "https://example.com/second.jpg"
+        });
+        await vitest_1.vi.waitFor(() => (0, vitest_1.expect)(notificationConstructor).toHaveBeenCalledTimes(1));
+        (0, vitest_1.expect)(notificationInstances[0]?.options).toMatchObject({
+            title: "First Playlist Video",
+            icon: vitest_1.expect.objectContaining({ source: "thumbnail" })
+        });
+        vitest_1.vi.unstubAllGlobals();
+    });
+    (0, vitest_1.it)("keeps playlist notifications on the application icon", async () => {
+        vitest_1.vi.stubGlobal("fetch", vitest_1.vi.fn(async () => new Response(Uint8Array.from([1, 2, 3]), {
+            status: 200,
+            headers: { "content-type": "image/jpeg" }
+        })));
+        const service = new nativeNotificationService_1.NativeNotificationService(createSettings());
+        service.handleDownloadStateChange({ id: "playlist-download-2", status: "completed", progress: 100, downloadedSize: 100, fileSize: 100, speed: 0, eta: "--" }, createItem({
+            id: "playlist-download-2",
+            title: "Playlist Video 2",
+            thumbnail: "",
+            sourceUrl: "https://www.youtube.com/watch?v=playlist-video-2"
+        }));
+        await vitest_1.vi.waitFor(() => (0, vitest_1.expect)(notificationConstructor).toHaveBeenCalledTimes(1));
+        (0, vitest_1.expect)(nativeImageMock.createFromPath).toHaveBeenCalledTimes(1);
+        (0, vitest_1.expect)(nativeImageMock.createFromPath.mock.calls[0]?.[0]).toContain("icon.ico");
+        vitest_1.vi.unstubAllGlobals();
+    });
+    (0, vitest_1.it)("falls back to the application icon when the thumbnail fails", async () => {
         vitest_1.vi.stubGlobal("fetch", vitest_1.vi.fn(async () => new Response(null, { status: 503 })));
         const service = new nativeNotificationService_1.NativeNotificationService(createSettings());
         service.handleDownloadStateChange({ id: "download-thumbnail-error", status: "completed", progress: 100, downloadedSize: 100, fileSize: 100, speed: 0, eta: "--" }, createItem({ id: "download-thumbnail-error", thumbnail: "https://example.com/thumbnail.jpg" }));
         await vitest_1.vi.waitFor(() => (0, vitest_1.expect)(notificationConstructor).toHaveBeenCalledTimes(1));
-        (0, vitest_1.expect)(notificationInstances[0]?.options).toEqual({
+        (0, vitest_1.expect)(notificationInstances[0]?.options).toEqual(vitest_1.expect.objectContaining({
             title: "Example Video",
-            body: "Download completed successfully"
-        });
+            body: "Download completed successfully",
+            icon: vitest_1.expect.anything()
+        }));
         vitest_1.vi.unstubAllGlobals();
     });
     (0, vitest_1.it)("ignores non-terminal download states", () => {
@@ -239,7 +285,7 @@ function createSchedule(overrides) {
         (0, vitest_1.expect)(notificationConstructor).toHaveBeenCalledTimes(2);
         (0, vitest_1.expect)(notificationInstances[0]?.options).toMatchObject({ body: "Scheduled download queued" });
     });
-    (0, vitest_1.it)("uses scheduled video title and thumbnail when available", async () => {
+    (0, vitest_1.it)("uses scheduled video thumbnail", async () => {
         vitest_1.vi.stubGlobal("fetch", vitest_1.vi.fn(async () => new Response(Uint8Array.from([1, 2, 3]), {
             status: 200,
             headers: { "content-type": "image/jpeg" }
@@ -271,7 +317,7 @@ function createSchedule(overrides) {
         (0, vitest_1.expect)(notificationInstances[0]?.options).toMatchObject({
             title: "Example Video",
             body: "Scheduled download queued",
-            icon: vitest_1.expect.objectContaining({ filePath: vitest_1.expect.stringContaining("remon-download-thumbnails") })
+            icon: vitest_1.expect.objectContaining({ source: "thumbnail" })
         });
         vitest_1.vi.unstubAllGlobals();
     });

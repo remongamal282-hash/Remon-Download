@@ -52,12 +52,28 @@ exports.hasTray = hasTray;
 exports.getTray = getTray;
 const electron_1 = require("electron");
 const path = __importStar(require("path"));
+const fs = __importStar(require("fs"));
 let tray = null;
+function setSkipTaskbar(mainWindow, skip) {
+    if (typeof mainWindow.setSkipTaskbar === "function") {
+        mainWindow.setSkipTaskbar(skip);
+    }
+}
 const getIconPath = () => {
-    const applicationPath = typeof electron_1.app.getAppPath === "function"
+    const appPath = typeof electron_1.app.getAppPath === "function"
         ? electron_1.app.getAppPath()
         : path.resolve(__dirname, "../..");
-    return path.join(applicationPath, "icon.png");
+    const candidates = [
+        path.join(appPath, "icon.ico"),
+        path.join(appPath, "icon.png"),
+        path.join(process.cwd(), "icon.ico"),
+        path.join(process.cwd(), "icon.png")
+    ];
+    if (process.resourcesPath && process.defaultApp !== true) {
+        candidates.push(path.join(process.resourcesPath, "app.asar", "icon.ico"), path.join(process.resourcesPath, "app.asar", "icon.png"), path.join(process.resourcesPath, "icon.ico"), path.join(process.resourcesPath, "icon.png"));
+    }
+    const iconPath = candidates.find((candidate) => fs.existsSync(candidate));
+    return iconPath ?? candidates[0];
 };
 /**
  * Create the System Tray icon and context menu
@@ -70,11 +86,23 @@ function createTray(mainWindow) {
     }
     try {
         const iconPath = getIconPath();
-        const icon = electron_1.nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+        console.log(`[Tray] Loading icon from: ${iconPath}`);
+        if (!fs.existsSync(iconPath)) {
+            throw new Error(`Tray icon file does not exist: ${iconPath}`);
+        }
+        const sourceIcon = electron_1.nativeImage.createFromPath(iconPath);
+        if (sourceIcon.isEmpty()) {
+            throw new Error(`Tray icon could not be decoded: ${iconPath}`);
+        }
+        const icon = sourceIcon.resize({ width: 16, height: 16 });
         if (icon.isEmpty()) {
             throw new Error(`Tray icon could not be loaded: ${iconPath}`);
         }
         tray = new electron_1.Tray(icon);
+        if (typeof tray.setImage === "function") {
+            tray.setImage(icon);
+        }
+        console.log("[Tray] Icon ready");
         // Set the tooltip
         tray.setToolTip("Remon Download");
         // Create context menu
@@ -126,6 +154,7 @@ function showWindow(mainWindow) {
     if (mainWindow.isMinimized()) {
         mainWindow.restore();
     }
+    setSkipTaskbar(mainWindow, false);
     mainWindow.show();
     mainWindow.focus();
     console.log("[Tray] Window shown and focused");
@@ -139,6 +168,7 @@ function hideWindow(mainWindow) {
         console.warn("[Tray] mainWindow is null, cannot hide");
         return;
     }
+    setSkipTaskbar(mainWindow, true);
     mainWindow.hide();
     console.log("[Tray] Window hidden");
 }

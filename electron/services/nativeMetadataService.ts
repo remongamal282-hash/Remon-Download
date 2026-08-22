@@ -164,6 +164,21 @@ export function classifyYouTubeUrl(url: string): LinkType {
 
 // ─── yt-dlp Execution ───────────────────────────────────────────────────────
 
+interface YtdlpFormat {
+  format_id?: string;
+  ext?: string;
+  height?: number | string;
+  fps?: number;
+  vcodec?: string;
+  acodec?: string;
+  tbr?: number;
+  abr?: number;
+  filesize?: number;
+  filesize_approx?: number;
+  format_note?: string;
+  resolution?: string;
+}
+
 interface YtdlpRawVideo {
   id?: string;
   url?: string;
@@ -175,18 +190,7 @@ interface YtdlpRawVideo {
   view_count?: number;
   thumbnail?: string;
   thumbnails?: Array<{ url?: string }>;
-  formats?: Array<{
-    format_id?: string;
-    ext?: string;
-    height?: number;
-    fps?: number;
-    vcodec?: string;
-    acodec?: string;
-    tbr?: number;
-    abr?: number;
-    filesize?: number;
-    filesize_approx?: number;
-  }>;
+  formats?: YtdlpFormat[];
   upload_date?: string;
   extractor?: string;
 }
@@ -201,7 +205,41 @@ interface YtdlpRawPlaylist {
   extractor?: string;
 }
 
+function getFormatHeight(format: YtdlpFormat): number | undefined {
+  if (typeof format.height === "number" && format.height > 0) {
+    return format.height;
+  }
+
+  if (typeof format.height === "string" && Number(format.height) > 0) {
+    return Number(format.height);
+  }
+
+  const candidates = [format.format_note, format.resolution];
+
+  for (const value of candidates) {
+    const match = String(value ?? "").match(/(?:x|\b)(\d{3,4})p?\b/i);
+    if (match) {
+      return Number(match[1]);
+    }
+  }
+
+  const formatIdMatch = String(format.format_id ?? "").match(/(?:x|\b)(\d{3,4})p\b/i);
+  if (formatIdMatch) {
+    return Number(formatIdMatch[1]);
+  }
+
+  return undefined;
+}
+
 type YtdlpRawOutput = YtdlpRawVideo | YtdlpRawPlaylist;
+
+let electronApp: any;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  electronApp = require("electron").app;
+} catch {
+  // Test environment without electron
+}
 
 function bundledYtdlpCandidates(): string[] {
   const candidates: string[] = [];
@@ -210,7 +248,7 @@ function bundledYtdlpCandidates(): string[] {
     candidates.push(path.join(process.resourcesPath, "runtime", "yt-dlp.exe"));
   }
 
-  if (process.defaultApp === true) {
+  if (process.defaultApp === true || (electronApp && electronApp.isPackaged === false)) {
     candidates.push(path.resolve(__dirname, "../../runtime/yt-dlp.exe"));
   }
 
@@ -258,14 +296,16 @@ function parseVideoMetadata(
   const heights = new Set<number>();
 
   formats.forEach((f) => {
-    if (f.height && f.height > 0) {
-      heights.add(f.height);
+    const height = getFormatHeight(f);
+    if (height && height > 0) {
+      heights.add(height);
     }
   });
 
-  const qualityOptions = Array.from(heights)
-    .sort((a, b) => b - a)
-    .map((h) => `${h}p`);
+  const sortedHeights = Array.from(heights).sort((a, b) => b - a);
+  const qualityOptions = sortedHeights.length > 0
+    ? sortedHeights.map((h) => `${h}p`)
+    : ["1080p", "720p", "480p", "360p", "240p", "144p"];
 
   const videoFormats = new Set(
     formats
@@ -277,11 +317,11 @@ function parseVideoMetadata(
   const audioFormats = new Set<string>(["mp3", "opus"]);
 
   // Best format info
-  const bestFormat =
-    formats.find((f) => f.height && f.height > 0) ?? formats[0];
+  const bestFormat = formats.find((f) => getFormatHeight(f)) ?? formats[0];
+  const bestFormatHeight = bestFormat ? getFormatHeight(bestFormat) : undefined;
 
-  const resolution = bestFormat?.height
-    ? `${bestFormat.height}p`
+  const resolution = bestFormatHeight
+    ? `${bestFormatHeight}p`
     : "1080p";
 
   const fps = bestFormat?.fps ?? 30;
@@ -338,11 +378,13 @@ function parsePlaylistMetadata(
 ): PlaylistMetadata {
   const playlistId = raw.id ?? "unknown-playlist";
   const entries = raw.entries ?? [];
+  const playlistThumbnail = extractThumbnail(raw);
 
   const videos = entries
     .map((entry, index) => {
       const entryUrl = entry.url?.startsWith("http") ? entry.url : undefined;
-      return parseVideoMetadata(entry, "playlist-video", index + 1, entryUrl);
+      const video = parseVideoMetadata(entry, "playlist-video", index + 1, entryUrl);
+      return video.thumbnail ? video : { ...video, thumbnail: playlistThumbnail };
     });
 
   return {
@@ -407,9 +449,10 @@ export class NativeMetadataService {
       try {
         await this.executor.checkAccess(
           this.settingsYtdlpPath,
-          fsConstants.X_OK
+          fsConstants.F_OK
         );
 
+        console.log(`[MetadataService] Resolved yt-dlp from settings: ${this.settingsYtdlpPath}`);
         return this.settingsYtdlpPath;
       } catch {
         // Invalid settings path - fall through to PATH
@@ -418,7 +461,8 @@ export class NativeMetadataService {
 
     for (const candidate of bundledYtdlpCandidates()) {
       try {
-        await this.executor.checkAccess(candidate, fsConstants.X_OK);
+        await this.executor.checkAccess(candidate, fsConstants.F_OK);
+        console.log(`[MetadataService] Resolved bundled yt-dlp path: ${candidate}`);
         return candidate;
       } catch {
         // Try the next bundled or PATH candidate.
@@ -454,12 +498,14 @@ export class NativeMetadataService {
           });
         });
 
+        console.log(`[MetadataService] Resolved yt-dlp from system PATH: ${candidate}`);
         return candidate;
       } catch {
         // Try next candidate
       }
     }
 
+    console.error("[MetadataService] Could not resolve yt-dlp executable from any candidate path");
     throw new Error("ytdlp_not_found");
   }
 
@@ -471,15 +517,14 @@ export class NativeMetadataService {
     ytdlpPath: string,
     url: string,
     isPlaylist = false,
-    extractorArg = "youtube:player_client=android"
+    extractorArg?: string
   ): Promise<YtdlpRawOutput> {
     return new Promise((resolve, reject) => {
       const args = [
         "--dump-single-json",
         isPlaylist ? "--yes-playlist" : "--no-playlist",
         ...(isPlaylist ? ["--flat-playlist"] : []),
-        "--extractor-args",
-        extractorArg,
+        ...(extractorArg ? ["--extractor-args", extractorArg] : []),
         "--skip-download",
         "--no-warnings",
         url
@@ -510,6 +555,7 @@ export class NativeMetadataService {
       });
 
       proc.on("error", (err: any) => {
+        console.error(`[MetadataService] yt-dlp process spawn error (${ytdlpPath}):`, err);
         if (err.code === "ETIMEDOUT") {
           reject(new Error("ytdlp_timeout"));
         } else if (err.code === "ENOENT") {
@@ -527,10 +573,12 @@ export class NativeMetadataService {
             ) as YtdlpRawOutput;
 
             resolve(parsed);
-          } catch {
+          } catch (jsonErr) {
+            console.error(`[MetadataService] Failed to parse yt-dlp output JSON (${ytdlpPath}):`, jsonErr, `stdout:`, stdout.slice(0, 300));
             reject(new Error("ytdlp_invalid_json"));
           }
         } else {
+          console.error(`[MetadataService] yt-dlp exited with non-zero code ${code}. Path: ${ytdlpPath}, Stderr:`, stderr);
           // Map common yt-dlp error messages
           const stderrLower = stderr.toLowerCase();
 
@@ -581,11 +629,13 @@ export class NativeMetadataService {
     url: string,
     isPlaylist = false
   ): Promise<YtdlpRawOutput> {
-    const extractorArgCandidates = [
-      "youtube:player_client=android",
+    const extractorArgCandidates: Array<string | undefined> = [
+      undefined,
       "youtube:player_client=web",
+      "youtube:player_client=android",
       "youtube:player_client=ios",
-      "youtube:player_client=tv_embedded"
+      "youtube:player_client=web_safari",
+      "youtube:player_client=tv_embedded",
     ];
 
     let lastError: unknown = null;

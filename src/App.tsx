@@ -3,6 +3,7 @@ import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster } from "sonner";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { QueueHistoryBridge } from "./components/QueueHistoryBridge";
+import { NotificationBridge } from "./components/NotificationBridge";
 import { AppLayout } from "./layouts/AppLayout";
 import { AboutPage } from "./pages/AboutPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -68,6 +69,7 @@ export function App() {
         </Routes>
       </HashRouter>
       <QueueHistoryBridge />
+      <NotificationBridge />
       <Toaster richColors closeButton />
     </ErrorBoundary>
   );

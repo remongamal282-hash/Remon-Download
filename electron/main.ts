@@ -1,5 +1,6 @@
-import { app, BrowserWindow, Menu, globalShortcut } from "electron";
+import { app, BrowserWindow, Menu, globalShortcut, nativeImage } from "electron";
 import * as path from "path";
+import * as fs from "fs";
 import { registerIpcHandlers } from "./ipc/handlers";
 import { createTray, destroyTray, showWindow, hideWindow, hasTray } from "./tray";
 import { SchedulerBackgroundLoop } from "./schedulerBackground";
@@ -59,24 +60,57 @@ function minimizeWindow(window: BrowserWindow | null): void {
   window.minimize();
 }
 
-const appIconPath = process.resourcesPath && process.defaultApp !== true
-  ? path.join(process.resourcesPath, "app.asar", "icon.png")
-  : path.resolve(__dirname, "../../icon.png");
+function getAppIcon(): Electron.NativeImage | string {
+  const appPath = typeof app.getAppPath === "function" ? app.getAppPath() : process.cwd();
+  const candidates = [
+    path.join(appPath, "icon.ico"),
+    path.join(appPath, "icon.png"),
+    path.join(process.cwd(), "icon.ico"),
+    path.join(process.cwd(), "icon.png")
+  ];
+
+  if (process.resourcesPath && process.defaultApp !== true) {
+    candidates.push(
+      path.join(process.resourcesPath, "app.asar", "icon.ico"),
+      path.join(process.resourcesPath, "app.asar", "icon.png"),
+      path.join(process.resourcesPath, "icon.ico"),
+      path.join(process.resourcesPath, "icon.png")
+    );
+  }
+
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        const img = nativeImage.createFromPath(candidate);
+        if (!img.isEmpty()) {
+          return img;
+        }
+      }
+    } catch {
+      // try next
+    }
+  }
+
+  return path.join(appPath, "icon.png");
+}
 
 // Set the Windows toast identity before any window or notification service is created.
-app.setName("Remon Download");
-if (process.platform === "win32") {
+if (typeof app.setName === "function") {
+  app.setName("Remon Download");
+}
+if (process.platform === "win32" && typeof app.setAppUserModelId === "function") {
   app.setAppUserModelId("com.remon.download");
 }
 
 function createWindow(): void {
+  const windowIcon = getAppIcon();
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 600,
     minWidth: 900,
     minHeight: 500,
     title: "Remon Download",
-    icon: appIconPath,
+    icon: windowIcon,
     autoHideMenuBar: true,
     titleBarStyle: "default",
     webPreferences: {
@@ -87,6 +121,13 @@ function createWindow(): void {
       webSecurity: true
     }
   });
+
+  if (process.platform === "win32" && typeof mainWindow.setAppDetails === "function") {
+    mainWindow.setAppDetails({
+      appId: "com.remon.download",
+      appIconPath: path.join(app.getAppPath(), "icon.ico")
+    });
+  }
 
   if (!schedulerLoop) {
     const settingsService = new NativeSettingsService();
@@ -245,6 +286,8 @@ function createWindow(): void {
 
 app.whenReady().then(async () => {
   app.setAppUserModelId("com.remon.download");
+  app.setName("Remon Download");
+  await settingsService.initialize();
   const settings = await settingsService.get();
   minimizeToTrayEnabled = settings.minimizeToTray;
 

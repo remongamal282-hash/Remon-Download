@@ -4,6 +4,9 @@ exports.downloadService = exports.MockDownloadService = void 0;
 const downloadSimulation_1 = require("../utils/downloadSimulation");
 const stateMachine_1 = require("../utils/stateMachine");
 class MockDownloadService {
+    async remove(_id) {
+        // Mock downloads are owned by the renderer queue store.
+    }
     createFromMetadata(metadata, order, quality, format) {
         const now = Date.now();
         return {

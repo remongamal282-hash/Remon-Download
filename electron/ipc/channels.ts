@@ -40,7 +40,8 @@ export const IPC_CHANNELS = {
  */
 export const IPC_EVENTS = {
   DOWNLOAD_PROGRESS: "download:progress",
-  DOWNLOAD_STATE_CHANGE: "download:state-change"
+  DOWNLOAD_STATE_CHANGE: "download:state-change",
+  NOTIFICATION: "notification:show"
 } as const;
 
 export type IpcEventChannel = (typeof IPC_EVENTS)[keyof typeof IPC_EVENTS];
@@ -127,6 +128,12 @@ export interface DownloadProgressPayload {
   totalSize: number;
   speed: number;
   eta: string;
+}
+
+export interface NotificationPayload {
+  title: string;
+  body: string;
+  thumbnail?: string;
 }
 
 export interface DownloadStateChangePayload {

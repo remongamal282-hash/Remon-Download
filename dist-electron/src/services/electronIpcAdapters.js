@@ -170,6 +170,10 @@ class ElectronDownloadService {
         void window.electronAPI.download.add(item);
         return item;
     }
+    async remove(id) {
+        await window.electronAPI.download.remove(id);
+        this.itemsCache.delete(id);
+    }
     createFromHistoryItem(item, order) {
         const now = Date.now();
         const downloadItem = {

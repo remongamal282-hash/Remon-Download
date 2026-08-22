@@ -140,7 +140,7 @@ export class SchedulerBackgroundLoop {
         thumbnail: metadata.thumbnail,
         title: metadata.title,
         sourceUrl: metadata.sourceUrl,
-        quality: "auto",
+        quality: metadata.qualityOptions[0] ?? metadata.resolution ?? "720p",
         format: "mp4",
         fileSize: metadata.fileSize,
         downloadedSize: 0,

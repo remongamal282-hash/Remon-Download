@@ -252,6 +252,36 @@ describe("NativeMetadataService — yt-dlp Integration", () => {
       expect(mockExecutor.spawnCalls[0]?.command).toBe("/custom/path/to/yt-dlp");
     });
 
+    it("uses bundled yt-dlp from process.resourcesPath before PATH", async () => {
+      const previousResourcesPath = process.resourcesPath;
+      Object.defineProperty(process, "resourcesPath", {
+        value: "C:\\Program Files\\Remon Download\\resources",
+        configurable: true
+      });
+
+      mockExecutor.setAccessBehavior(async (candidate) => {
+        if (candidate.endsWith("runtime\\yt-dlp.exe")) {
+          return;
+        }
+        throw new Error("ENOENT");
+      });
+      mockExecutor.setSpawnBehavior(() => createSuccessProcess(SAMPLE_VIDEO_JSON));
+
+      try {
+        const service = new NativeMetadataService(undefined, mockExecutor);
+        await service.analyze("https://www.youtube.com/watch?v=test");
+      } finally {
+        Object.defineProperty(process, "resourcesPath", {
+          value: previousResourcesPath,
+          configurable: true
+        });
+      }
+
+      expect(mockExecutor.spawnCalls[0]?.command).toBe(
+        "C:\\Program Files\\Remon Download\\resources\\runtime\\yt-dlp.exe"
+      );
+      expect(mockExecutor.spawnCalls[0]?.args).toContain("--dump-single-json");
+    });
     it("falls back to PATH if Settings path is invalid", async () => {
       mockExecutor.setAccessBehavior(async () => {
         throw new Error("ENOENT");

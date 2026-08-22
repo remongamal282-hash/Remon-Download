@@ -40,15 +40,26 @@ const vitest_1 = require("vitest");
         });
     });
     (0, vitest_1.describe)("Window Minimize Behavior", () => {
-        (0, vitest_1.it)("should minimize window via tray", () => {
+        (0, vitest_1.it)("should hide window to tray instead of actually minimizing when enabled", () => {
+            const mockEvent = {
+                preventDefault: vitest_1.vi.fn()
+            };
             const mockWindow = {
                 on: vitest_1.vi.fn(),
                 minimize: vitest_1.vi.fn(),
-                hide: vitest_1.vi.fn()
+                hide: vitest_1.vi.fn(),
+                isVisible: vitest_1.vi.fn(() => false)
             };
-            mockWindow.on("minimize", () => {
+            const handler = (event) => {
+                if (event && typeof event.preventDefault === "function") {
+                    event.preventDefault();
+                }
                 mockWindow.hide();
-            });
+            };
+            mockWindow.on("minimize", handler);
+            handler(mockEvent);
+            (0, vitest_1.expect)(mockEvent.preventDefault).toHaveBeenCalled();
+            (0, vitest_1.expect)(mockWindow.hide).toHaveBeenCalled();
             (0, vitest_1.expect)(mockWindow.on).toHaveBeenCalledWith("minimize", vitest_1.expect.any(Function));
         });
     });

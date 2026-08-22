@@ -36,7 +36,8 @@ var IPC_CHANNELS = {
 };
 var IPC_EVENTS = {
   DOWNLOAD_PROGRESS: "download:progress",
-  DOWNLOAD_STATE_CHANGE: "download:state-change"
+  DOWNLOAD_STATE_CHANGE: "download:state-change",
+  NOTIFICATION: "notification:show"
 };
 
 // electron/preload.ts
@@ -49,6 +50,11 @@ async function invoke(channel, payload) {
 }
 var electronAPI = {
   isElectron: true,
+  onNotification: (callback) => {
+    const listener = (_event, data) => callback(data);
+    import_electron.ipcRenderer.on(IPC_EVENTS.NOTIFICATION, listener);
+    return () => import_electron.ipcRenderer.removeListener(IPC_EVENTS.NOTIFICATION, listener);
+  },
   metadata: {
     analyze: (url) => invoke(IPC_CHANNELS.METADATA_ANALYZE, { url })
   },

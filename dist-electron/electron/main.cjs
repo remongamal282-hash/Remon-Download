@@ -24,6 +24,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 // electron/main.ts
 var import_electron5 = require("electron");
 var path5 = __toESM(require("path"), 1);
+var fs5 = __toESM(require("fs"), 1);
 
 // electron/ipc/handlers.ts
 var import_electron4 = require("electron");
@@ -63,7 +64,8 @@ var IPC_CHANNELS = {
 };
 var IPC_EVENTS = {
   DOWNLOAD_PROGRESS: "download:progress",
-  DOWNLOAD_STATE_CHANGE: "download:state-change"
+  DOWNLOAD_STATE_CHANGE: "download:state-change",
+  NOTIFICATION: "notification:show"
 };
 
 // electron/services/nativeMetadataService.ts
@@ -142,12 +144,37 @@ function classifyYouTubeUrl(url) {
   }
   return "video";
 }
+function getFormatHeight(format) {
+  if (typeof format.height === "number" && format.height > 0) {
+    return format.height;
+  }
+  if (typeof format.height === "string" && Number(format.height) > 0) {
+    return Number(format.height);
+  }
+  const candidates = [format.format_note, format.resolution];
+  for (const value of candidates) {
+    const match = String(value ?? "").match(/(?:x|\b)(\d{3,4})p?\b/i);
+    if (match) {
+      return Number(match[1]);
+    }
+  }
+  const formatIdMatch = String(format.format_id ?? "").match(/(?:x|\b)(\d{3,4})p\b/i);
+  if (formatIdMatch) {
+    return Number(formatIdMatch[1]);
+  }
+  return void 0;
+}
+var electronApp;
+try {
+  electronApp = require("electron").app;
+} catch {
+}
 function bundledYtdlpCandidates() {
   const candidates = [];
   if (process.resourcesPath) {
     candidates.push(path.join(process.resourcesPath, "runtime", "yt-dlp.exe"));
   }
-  if (process.defaultApp === true) {
+  if (process.defaultApp === true || electronApp && electronApp.isPackaged === false) {
     candidates.push(path.resolve(__dirname, "../../runtime/yt-dlp.exe"));
   }
   return Array.from(new Set(candidates.filter(Boolean)));
@@ -174,17 +201,20 @@ function parseVideoMetadata(raw, linkType, index = 1, sourceUrl) {
   const thumbnail = extractThumbnail(raw) || (videoId !== `unknown-${index}` ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : "");
   const heights = /* @__PURE__ */ new Set();
   formats.forEach((f) => {
-    if (f.height && f.height > 0) {
-      heights.add(f.height);
+    const height = getFormatHeight(f);
+    if (height && height > 0) {
+      heights.add(height);
     }
   });
-  const qualityOptions = Array.from(heights).sort((a, b) => b - a).map((h) => `${h}p`);
+  const sortedHeights = Array.from(heights).sort((a, b) => b - a);
+  const qualityOptions = sortedHeights.length > 0 ? sortedHeights.map((h) => `${h}p`) : ["1080p", "720p", "480p", "360p", "240p", "144p"];
   const videoFormats = new Set(
     formats.map((f) => f.ext).filter((ext) => !!ext).filter((ext) => ["mp4", "webm", "mkv"].includes(ext))
   );
   const audioFormats = /* @__PURE__ */ new Set(["mp3", "opus"]);
-  const bestFormat = formats.find((f) => f.height && f.height > 0) ?? formats[0];
-  const resolution = bestFormat?.height ? `${bestFormat.height}p` : "1080p";
+  const bestFormat = formats.find((f) => getFormatHeight(f)) ?? formats[0];
+  const bestFormatHeight = bestFormat ? getFormatHeight(bestFormat) : void 0;
+  const resolution = bestFormatHeight ? `${bestFormatHeight}p` : "1080p";
   const fps = bestFormat?.fps ?? 30;
   const videoCodec = bestFormat?.vcodec ?? "H.264";
   const audioCodec = bestFormat?.acodec ?? "AAC";
@@ -220,9 +250,11 @@ function parseVideoMetadata(raw, linkType, index = 1, sourceUrl) {
 function parsePlaylistMetadata(raw, url) {
   const playlistId = raw.id ?? "unknown-playlist";
   const entries = raw.entries ?? [];
+  const playlistThumbnail = extractThumbnail(raw);
   const videos = entries.map((entry, index) => {
     const entryUrl = entry.url?.startsWith("http") ? entry.url : void 0;
-    return parseVideoMetadata(entry, "playlist-video", index + 1, entryUrl);
+    const video = parseVideoMetadata(entry, "playlist-video", index + 1, entryUrl);
+    return video.thumbnail ? video : { ...video, thumbnail: playlistThumbnail };
   });
   return {
     id: `yt-playlist-${playlistId}`,
@@ -270,15 +302,17 @@ var NativeMetadataService = class {
       try {
         await this.executor.checkAccess(
           this.settingsYtdlpPath,
-          import_promises.constants.X_OK
+          import_promises.constants.F_OK
         );
+        console.log(`[MetadataService] Resolved yt-dlp from settings: ${this.settingsYtdlpPath}`);
         return this.settingsYtdlpPath;
       } catch {
       }
     }
     for (const candidate of bundledYtdlpCandidates()) {
       try {
-        await this.executor.checkAccess(candidate, import_promises.constants.X_OK);
+        await this.executor.checkAccess(candidate, import_promises.constants.F_OK);
+        console.log(`[MetadataService] Resolved bundled yt-dlp path: ${candidate}`);
         return candidate;
       } catch {
       }
@@ -291,7 +325,7 @@ var NativeMetadataService = class {
     ];
     for (const candidate of candidates) {
       try {
-        await new Promise((resolve5, reject) => {
+        await new Promise((resolve4, reject) => {
           const proc = this.executor.spawn(
             candidate,
             ["--version"],
@@ -300,30 +334,31 @@ var NativeMetadataService = class {
           proc.on("error", reject);
           proc.on("exit", (code) => {
             if (code === 0) {
-              resolve5();
+              resolve4();
             } else {
               reject(new Error(`Exit code ${code}`));
             }
           });
         });
+        console.log(`[MetadataService] Resolved yt-dlp from system PATH: ${candidate}`);
         return candidate;
       } catch {
       }
     }
+    console.error("[MetadataService] Could not resolve yt-dlp executable from any candidate path");
     throw new Error("ytdlp_not_found");
   }
   /**
    * Spawns yt-dlp process and returns parsed JSON output.
    * Optimized for speed with faster options.
    */
-  async executeYtdlp(ytdlpPath, url, isPlaylist = false, extractorArg = "youtube:player_client=android") {
-    return new Promise((resolve5, reject) => {
+  async executeYtdlp(ytdlpPath, url, isPlaylist = false, extractorArg) {
+    return new Promise((resolve4, reject) => {
       const args = [
         "--dump-single-json",
         isPlaylist ? "--yes-playlist" : "--no-playlist",
         ...isPlaylist ? ["--flat-playlist"] : [],
-        "--extractor-args",
-        extractorArg,
+        ...extractorArg ? ["--extractor-args", extractorArg] : [],
         "--skip-download",
         "--no-warnings",
         url
@@ -346,6 +381,7 @@ var NativeMetadataService = class {
         stderr += data.toString();
       });
       proc.on("error", (err) => {
+        console.error(`[MetadataService] yt-dlp process spawn error (${ytdlpPath}):`, err);
         if (err.code === "ETIMEDOUT") {
           reject(new Error("ytdlp_timeout"));
         } else if (err.code === "ENOENT") {
@@ -360,11 +396,13 @@ var NativeMetadataService = class {
             const parsed = JSON.parse(
               stdout
             );
-            resolve5(parsed);
-          } catch {
+            resolve4(parsed);
+          } catch (jsonErr) {
+            console.error(`[MetadataService] Failed to parse yt-dlp output JSON (${ytdlpPath}):`, jsonErr, `stdout:`, stdout.slice(0, 300));
             reject(new Error("ytdlp_invalid_json"));
           }
         } else {
+          console.error(`[MetadataService] yt-dlp exited with non-zero code ${code}. Path: ${ytdlpPath}, Stderr:`, stderr);
           const stderrLower = stderr.toLowerCase();
           if (stderrLower.includes("private video") || stderrLower.includes("members-only")) {
             reject(new Error("video_private"));
@@ -397,9 +435,11 @@ var NativeMetadataService = class {
   }
   async executeYtdlpWithFallback(ytdlpPath, url, isPlaylist = false) {
     const extractorArgCandidates = [
-      "youtube:player_client=android",
+      void 0,
       "youtube:player_client=web",
+      "youtube:player_client=android",
       "youtube:player_client=ios",
+      "youtube:player_client=web_safari",
       "youtube:player_client=tv_embedded"
     ];
     let lastError = null;
@@ -489,15 +529,20 @@ var import_child_process2 = require("child_process");
 var path2 = __toESM(require("path"), 1);
 var fs = __toESM(require("fs/promises"), 1);
 var import_fs = require("fs");
+var electronApp2;
+try {
+  electronApp2 = require("electron").app;
+} catch {
+}
 function bundledRuntimeCandidates(fileName) {
   const candidates = [];
   if (process.resourcesPath) {
     candidates.push(path2.join(process.resourcesPath, "runtime", fileName));
   }
-  if (process.defaultApp === true) {
+  if (process.defaultApp === true || electronApp2 && electronApp2.isPackaged === false) {
     candidates.push(path2.resolve(__dirname, "../../runtime", fileName));
   }
-  return candidates;
+  return Array.from(new Set(candidates.filter(Boolean)));
 }
 var DefaultProcessExecutor2 = class {
   spawn(command, args, options) {
@@ -542,7 +587,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
       try {
         await this.executor.checkAccess(
           this.settings.ytdlpPath,
-          import_fs.constants.X_OK
+          import_fs.constants.F_OK
         );
         return this.settings.ytdlpPath;
       } catch {
@@ -550,7 +595,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     }
     for (const candidate of bundledRuntimeCandidates("yt-dlp.exe")) {
       try {
-        await this.executor.checkAccess(candidate, import_fs.constants.X_OK);
+        await this.executor.checkAccess(candidate, import_fs.constants.F_OK);
         return candidate;
       } catch {
       }
@@ -563,7 +608,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     ];
     for (const candidate of candidates) {
       try {
-        await new Promise((resolve5, reject) => {
+        await new Promise((resolve4, reject) => {
           const proc = this.executor.spawn(
             candidate,
             ["--version"],
@@ -574,7 +619,7 @@ var NativeDownloadService = class extends import_events.EventEmitter {
           proc.on("error", reject);
           proc.on("exit", (code) => {
             if (code === 0) {
-              resolve5();
+              resolve4();
             } else {
               reject(
                 new Error(`Exit code ${code}`)
@@ -593,8 +638,8 @@ var NativeDownloadService = class extends import_events.EventEmitter {
     const ffprobePaths = bundledRuntimeCandidates("ffprobe.exe");
     for (let index = 0; index < ffmpegPaths.length; index += 1) {
       try {
-        await this.executor.checkAccess(ffmpegPaths[index], import_fs.constants.X_OK);
-        await this.executor.checkAccess(ffprobePaths[index], import_fs.constants.X_OK);
+        await this.executor.checkAccess(ffmpegPaths[index], import_fs.constants.F_OK);
+        await this.executor.checkAccess(ffprobePaths[index], import_fs.constants.F_OK);
         return path2.dirname(ffmpegPaths[index]);
       } catch {
       }
@@ -641,10 +686,6 @@ var NativeDownloadService = class extends import_events.EventEmitter {
         item.format
       );
     }
-    args.push(
-      "--extractor-args",
-      "youtube:player_client=android"
-    );
     if (this.settings.speedLimit !== "unlimited") {
       const limitKB = Math.floor(
         this.settings.speedLimit / 1024
@@ -2727,15 +2768,44 @@ var NativeFavoritesService = class {
 
 // electron/services/nativeNotificationService.ts
 var import_electron2 = require("electron");
-var import_crypto = require("crypto");
+var import_child_process3 = require("child_process");
 var import_fs3 = require("fs");
 var path3 = __toESM(require("path"), 1);
+function escapeXml(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+function escapePowerShell(value) {
+  return value.replace(/'/g, "''");
+}
+async function showWindowsToast(title, body, thumbnail) {
+  if (!thumbnail) {
+    throw new Error("thumbnail_unavailable");
+  }
+  const imagePath = path3.join(
+    import_electron2.app.getPath("temp"),
+    `remon-download-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`
+  );
+  await import_fs3.promises.writeFile(imagePath, thumbnail);
+  const xml = `<toast><visual><binding template="ToastGeneric"><image placement="appLogoOverride" hint-crop="circle" src="file:///${escapeXml(imagePath.replace(/\\/g, "/"))}"/><text>${escapeXml(title)}</text><text>${escapeXml(body)}</text></binding></visual></toast>`;
+  const script = `Add-Type -AssemblyName System.Runtime.WindowsRuntime; $xml = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]::new(); $xml.LoadXml('${escapePowerShell(xml)}'); $toast = [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime]::new($xml); [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]::CreateToastNotifier('com.remon.download').Show($toast)`;
+  const encodedScript = Buffer.from(script, "utf16le").toString("base64");
+  try {
+    await new Promise((resolve4, reject) => {
+      (0, import_child_process3.execFile)(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encodedScript],
+        { windowsHide: true },
+        (error) => error ? reject(error) : resolve4()
+      );
+    });
+  } finally {
+    await import_fs3.promises.unlink(imagePath).catch(() => void 0);
+  }
+}
 var NativeNotificationService = class {
   settings;
   sentKeys = /* @__PURE__ */ new Set();
   pendingKeys = /* @__PURE__ */ new Set();
-  thumbnailPaths = /* @__PURE__ */ new Map();
-  thumbnailImages = /* @__PURE__ */ new Map();
   constructor(settings) {
     this.settings = settings;
   }
@@ -2755,8 +2825,9 @@ var NativeNotificationService = class {
       }
       this.sendDownloadOnce(`completed:${payload.id}`, {
         title: item.title || "Remon Download",
-        body: this.settings.language === "ar" ? "\u062A\u0645 \u062A\u062D\u0645\u064A\u0644 \u0627\u0644\u0641\u064A\u062F\u064A\u0648 \u0628\u0646\u062C\u0627\u062D" : "Download completed successfully"
-      }, this.resolveNotificationThumbnail(item));
+        body: this.settings.language === "ar" ? "\u062A\u0645 \u062A\u062D\u0645\u064A\u0644 \u0627\u0644\u0641\u064A\u062F\u064A\u0648 \u0628\u0646\u062C\u0627\u062D" : "Download completed successfully",
+        thumbnail: item.thumbnail
+      });
       return;
     }
     if (payload.status === "failed") {
@@ -2767,7 +2838,7 @@ var NativeNotificationService = class {
       this.sendDownloadOnce(`failed:${payload.id}`, {
         title: item.title || "Remon Download",
         body: this.getFailureNotificationMessage(payload.errorCode, payload.errorMessage)
-      }, this.resolveNotificationThumbnail(item));
+      });
     }
   }
   getFailureNotificationMessage(errorCode, errorMessage) {
@@ -2823,48 +2894,10 @@ var NativeNotificationService = class {
       return;
     }
     this.sendDownloadOnce(`scheduled:${schedule.id}:${schedule.triggerCount}`, {
-      title: metadata?.title || (this.settings.language === "ar" ? "\u062A\u062D\u0645\u064A\u0644 \u0645\u062C\u062F\u0648\u0644" : "Scheduled Download"),
-      body: this.settings.language === "ar" ? "\u062A\u0645\u062A \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u062A\u062D\u0645\u064A\u0644 \u0627\u0644\u0645\u062C\u062F\u0648\u0644 \u0625\u0644\u0649 \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u062A\u0646\u0632\u064A\u0644\u0627\u062A" : "Scheduled download queued"
-    }, this.resolveVideoThumbnail(metadata?.thumbnail, metadata?.sourceUrl ?? schedule.sourceUrl));
-  }
-  resolveNotificationThumbnail(item) {
-    if (item.thumbnail && /^https?:\/\//i.test(item.thumbnail)) {
-      return item.thumbnail;
-    }
-    const sourceUrl = item.sourceUrl;
-    if (!sourceUrl) {
-      return void 0;
-    }
-    const source = sourceUrl.toLowerCase();
-    const playlistLike = /playlist|list=|index=|&list=|\?list=/i.test(source) || /playlist/i.test(item.id || "") || /playlist/i.test(item.title || "");
-    if (!playlistLike) {
-      return void 0;
-    }
-    try {
-      const videoId = new URL(sourceUrl).searchParams.get("v");
-      return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : void 0;
-    } catch {
-      return void 0;
-    }
-  }
-  resolveVideoThumbnail(thumbnailUrl, sourceUrl) {
-    if (thumbnailUrl && /^https?:\/\//i.test(thumbnailUrl)) {
-      return thumbnailUrl;
-    }
-    if (!sourceUrl) {
-      return void 0;
-    }
-    const source = sourceUrl.toLowerCase();
-    const playlistLike = /playlist|list=|index=|&list=|\?list=/i.test(source);
-    if (!playlistLike) {
-      return void 0;
-    }
-    try {
-      const videoId = new URL(sourceUrl).searchParams.get("v");
-      return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : void 0;
-    } catch {
-      return void 0;
-    }
+      title: metadata?.title || "Remon Download",
+      body: this.settings.language === "ar" ? "\u062A\u0645\u062A \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u062A\u062D\u0645\u064A\u0644 \u0627\u0644\u0645\u062C\u062F\u0648\u0644 \u0625\u0644\u0649 \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u062A\u0646\u0632\u064A\u0644\u0627\u062A" : "Scheduled download queued",
+      thumbnail: metadata?.thumbnail
+    });
   }
   sendOnce(key, options) {
     if (this.sentKeys.has(key) || this.pendingKeys.has(key)) {
@@ -2876,109 +2909,97 @@ var NativeNotificationService = class {
         console.warn(`[Notification] Windows notifications are not supported: ${key}`);
         return;
       }
-      const notification = new import_electron2.Notification(options);
-      notification.show();
-      this.sentKeys.add(key);
-      console.log(`[Notification] Shown: ${key}`);
+      this.pendingKeys.add(key);
+      void this.showNotification(key, options);
     } catch (error) {
       console.error(`[Notification] Failed to show notification (${key}):`, error);
     }
   }
-  sendDownloadOnce(key, options, thumbnailUrl) {
-    if (!thumbnailUrl || !/^https?:\/\//i.test(thumbnailUrl)) {
-      this.sendOnce(key, options);
-      return;
-    }
-    if (this.sentKeys.has(key) || this.pendingKeys.has(key)) {
-      console.log(`[Notification] Duplicate suppressed: ${key}`);
-      return;
-    }
-    this.pendingKeys.add(key);
-    void this.resolveThumbnailPath(thumbnailUrl).then((icon) => {
-      this.pendingKeys.delete(key);
-      this.showNotification(key, { ...options, icon });
-    }).catch((error) => {
-      this.pendingKeys.delete(key);
-      console.warn(`[Notification] Thumbnail unavailable for ${key}:`, error);
-      this.sendOnce(key, options);
-    });
+  sendDownloadOnce(key, options) {
+    this.sendOnce(key, options);
   }
   showNotification(key, options) {
     if (this.sentKeys.has(key)) {
-      return;
+      return Promise.resolve();
     }
-    try {
-      if (!import_electron2.Notification.isSupported()) {
-        console.warn(`[Notification] Windows notifications are not supported: ${key}`);
-        return;
-      }
-      const iconPath = options.icon ?? path3.join(import_electron2.app.getAppPath(), "icon.png");
-      const icon = this.thumbnailImages.get(iconPath) ?? import_electron2.nativeImage.createFromPath(iconPath);
-      const notificationOptions = icon ? { ...options, icon } : options;
-      const notification = new import_electron2.Notification(notificationOptions);
-      if (icon?.isEmpty()) {
-        console.warn(`[Notification] Thumbnail image is empty: ${options.icon}`);
-      }
-      notification.show();
-      this.sentKeys.add(key);
-      console.log(`[Notification] Shown: ${key}${options.icon ? " with thumbnail" : ""}`);
-    } catch (error) {
-      console.error(`[Notification] Failed to show notification (${key}):`, error);
-    }
-  }
-  async resolveThumbnailPath(thumbnailUrl) {
-    const cachedPath = this.thumbnailPaths.get(thumbnailUrl);
-    if (cachedPath) {
-      return cachedPath;
-    }
-    const thumbnailCandidates = this.getThumbnailCandidates(thumbnailUrl);
-    const thumbnailDirectory = path3.join(import_electron2.app.getPath("temp"), "remon-download-thumbnails");
-    let lastError;
-    for (const candidate of thumbnailCandidates) {
+    return (async () => {
       try {
-        const response = await fetch(candidate);
-        if (!response.ok) {
-          throw new Error(`Thumbnail request failed with status ${response.status}`);
+        if (!import_electron2.Notification.isSupported()) {
+          console.warn(`[Notification] Windows notifications are not supported: ${key}`);
+          return;
         }
-        const imageData = Buffer.from(await response.arrayBuffer());
-        if (imageData.length === 0) {
-          throw new Error("Thumbnail response was empty");
+        if (process.platform === "win32" && typeof import_electron2.app.setAppUserModelId === "function") {
+          import_electron2.app.setAppUserModelId("com.remon.download");
         }
-        const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-        const extension = contentType.includes("png") ? ".png" : contentType.includes("webp") ? ".webp" : ".jpg";
-        const thumbnailPath = path3.join(
-          thumbnailDirectory,
-          `${(0, import_crypto.createHash)("sha256").update(candidate).digest("hex")}${extension}`
-        );
-        await import_fs3.promises.mkdir(thumbnailDirectory, { recursive: true });
-        await import_fs3.promises.writeFile(thumbnailPath, imageData);
-        if (typeof import_electron2.nativeImage.createFromBuffer === "function") {
-          const image = import_electron2.nativeImage.createFromBuffer(imageData);
-          if (image.isEmpty()) {
-            throw new Error("Thumbnail image could not be decoded");
+        const appRoot = typeof import_electron2.app.getAppPath === "function" ? import_electron2.app.getAppPath() : process.cwd();
+        const appIconCandidates = [
+          path3.join(appRoot, "icon.ico"),
+          path3.join(appRoot, "icon.png"),
+          path3.join(process.cwd(), "icon.ico"),
+          path3.join(process.cwd(), "icon.png"),
+          ...process.resourcesPath ? [
+            path3.join(process.resourcesPath, "app.asar", "icon.ico"),
+            path3.join(process.resourcesPath, "app.asar", "icon.png"),
+            path3.join(process.resourcesPath, "icon.ico"),
+            path3.join(process.resourcesPath, "icon.png")
+          ] : []
+        ];
+        let iconImage;
+        let thumbnailBuffer;
+        if (options.thumbnail) {
+          try {
+            const response = await fetch(options.thumbnail);
+            if (response.ok) {
+              thumbnailBuffer = Buffer.from(await response.arrayBuffer());
+              const image = import_electron2.nativeImage.createFromBuffer(
+                thumbnailBuffer
+              );
+              if (!image.isEmpty()) {
+                iconImage = image;
+              }
+            }
+          } catch (error) {
+            console.warn(`[Notification] Could not load thumbnail for ${key}:`, error);
           }
-          this.thumbnailImages.set(thumbnailPath, image);
         }
-        this.thumbnailPaths.set(thumbnailUrl, thumbnailPath);
-        return thumbnailPath;
+        if (process.platform === "win32" && thumbnailBuffer) {
+          try {
+            await showWindowsToast(options.title, options.body, thumbnailBuffer);
+            this.sentKeys.add(key);
+            console.log(`[Notification] Windows thumbnail notification shown: ${key}`);
+            return;
+          } catch (error) {
+            console.warn(`[Notification] Windows thumbnail notification failed; using fallback:`, error);
+          }
+        }
+        for (const candidate of appIconCandidates) {
+          if (iconImage) {
+            break;
+          }
+          try {
+            const img = import_electron2.nativeImage.createFromPath(candidate);
+            if (!img.isEmpty()) {
+              iconImage = img;
+              break;
+            }
+          } catch {
+          }
+        }
+        const notificationOptions = {
+          title: options.title,
+          body: options.body,
+          ...iconImage && !iconImage.isEmpty() ? { icon: iconImage } : {}
+        };
+        const notification = new import_electron2.Notification(notificationOptions);
+        notification.show();
+        this.sentKeys.add(key);
+        console.log(`[Notification] Shown: ${key}`);
       } catch (error) {
-        lastError = error;
+        console.error(`[Notification] Failed to show notification (${key}):`, error);
+      } finally {
+        this.pendingKeys.delete(key);
       }
-    }
-    throw lastError instanceof Error ? lastError : new Error("Thumbnail unavailable");
-  }
-  getThumbnailCandidates(thumbnailUrl) {
-    const candidates = [thumbnailUrl];
-    const videoIdMatch = thumbnailUrl.match(/\/vi\/([^/]+)/i);
-    if (videoIdMatch?.[1]) {
-      const videoId = videoIdMatch[1];
-      candidates.push(
-        `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
-        `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-        `https://i.ytimg.com/vi/${videoId}/default.jpg`
-      );
-    }
-    return [...new Set(candidates)];
+    })();
   }
 };
 
@@ -2995,15 +3016,17 @@ function setSkipTaskbar(mainWindow2, skip) {
 var getIconPath = () => {
   const appPath2 = typeof import_electron3.app.getAppPath === "function" ? import_electron3.app.getAppPath() : path4.resolve(__dirname, "../..");
   const candidates = [
-    path4.join(appPath2, "icon.png"),
     path4.join(appPath2, "icon.ico"),
-    path4.join(process.cwd(), "icon.png"),
-    path4.join(process.cwd(), "icon.ico")
+    path4.join(appPath2, "icon.png"),
+    path4.join(process.cwd(), "icon.ico"),
+    path4.join(process.cwd(), "icon.png")
   ];
   if (process.resourcesPath && process.defaultApp !== true) {
     candidates.push(
       path4.join(process.resourcesPath, "app.asar", "icon.ico"),
-      path4.join(process.resourcesPath, "app.asar", "icon.png")
+      path4.join(process.resourcesPath, "app.asar", "icon.png"),
+      path4.join(process.resourcesPath, "icon.ico"),
+      path4.join(process.resourcesPath, "icon.png")
     );
   }
   const iconPath = candidates.find((candidate) => fs4.existsSync(candidate));
@@ -3250,11 +3273,14 @@ function registerIpcHandlers(options = {}) {
   };
   import_electron4.ipcMain.handle(IPC_CHANNELS.METADATA_ANALYZE, async (_, { url }) => {
     try {
+      console.log(`[IPC] METADATA_ANALYZE requested for URL: ${url}`);
       const settings = await settingsService2.get();
       const metadataService = new NativeMetadataService(settings.ytdlpPath);
       const data = await metadataService.analyze(url);
+      console.log(`[IPC] METADATA_ANALYZE succeeded for URL: ${url}`);
       return wrapSuccess(data);
     } catch (err) {
+      console.error(`[IPC] METADATA_ANALYZE failed for URL (${url}):`, err);
       return wrapError(err);
     }
   });
@@ -3658,7 +3684,7 @@ var SchedulerBackgroundLoop = class {
         thumbnail: metadata.thumbnail,
         title: metadata.title,
         sourceUrl: metadata.sourceUrl,
-        quality: "auto",
+        quality: metadata.qualityOptions[0] ?? metadata.resolution ?? "720p",
         format: "mp4",
         fileSize: metadata.fileSize,
         downloadedSize: 0,
@@ -3784,19 +3810,50 @@ function minimizeWindow(window) {
   }
   window.minimize();
 }
-var appIconPath = process.resourcesPath && process.defaultApp !== true ? path5.join(process.resourcesPath, "app.asar", "icon.png") : path5.resolve(__dirname, "../../icon.png");
-import_electron5.app.setName("Remon Download");
-if (process.platform === "win32") {
+function getAppIcon() {
+  const appPath2 = typeof import_electron5.app.getAppPath === "function" ? import_electron5.app.getAppPath() : process.cwd();
+  const candidates = [
+    path5.join(appPath2, "icon.ico"),
+    path5.join(appPath2, "icon.png"),
+    path5.join(process.cwd(), "icon.ico"),
+    path5.join(process.cwd(), "icon.png")
+  ];
+  if (process.resourcesPath && process.defaultApp !== true) {
+    candidates.push(
+      path5.join(process.resourcesPath, "app.asar", "icon.ico"),
+      path5.join(process.resourcesPath, "app.asar", "icon.png"),
+      path5.join(process.resourcesPath, "icon.ico"),
+      path5.join(process.resourcesPath, "icon.png")
+    );
+  }
+  for (const candidate of candidates) {
+    try {
+      if (fs5.existsSync(candidate)) {
+        const img = import_electron5.nativeImage.createFromPath(candidate);
+        if (!img.isEmpty()) {
+          return img;
+        }
+      }
+    } catch {
+    }
+  }
+  return path5.join(appPath2, "icon.png");
+}
+if (typeof import_electron5.app.setName === "function") {
+  import_electron5.app.setName("Remon Download");
+}
+if (process.platform === "win32" && typeof import_electron5.app.setAppUserModelId === "function") {
   import_electron5.app.setAppUserModelId("com.remon.download");
 }
 function createWindow() {
+  const windowIcon = getAppIcon();
   mainWindow = new import_electron5.BrowserWindow({
     width: 1200,
     height: 600,
     minWidth: 900,
     minHeight: 500,
     title: "Remon Download",
-    icon: appIconPath,
+    icon: windowIcon,
     autoHideMenuBar: true,
     titleBarStyle: "default",
     webPreferences: {
@@ -3807,6 +3864,12 @@ function createWindow() {
       webSecurity: true
     }
   });
+  if (process.platform === "win32" && typeof mainWindow.setAppDetails === "function") {
+    mainWindow.setAppDetails({
+      appId: "com.remon.download",
+      appIconPath: path5.join(import_electron5.app.getAppPath(), "icon.ico")
+    });
+  }
   if (!schedulerLoop) {
     const settingsService2 = new NativeSettingsService();
     void settingsService2.initialize();
@@ -3934,6 +3997,8 @@ function createWindow() {
 }
 import_electron5.app.whenReady().then(async () => {
   import_electron5.app.setAppUserModelId("com.remon.download");
+  import_electron5.app.setName("Remon Download");
+  await settingsService.initialize();
   const settings = await settingsService.get();
   minimizeToTrayEnabled = settings.minimizeToTray;
   createWindow();

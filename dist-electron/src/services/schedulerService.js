@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.schedulerService = exports.MockSchedulerService = void 0;
+const metadataService_1 = require("./metadataService");
 function buildRunAt(date, time) {
     return new Date(`${date}T${time}:00`).toISOString();
 }
@@ -47,28 +48,46 @@ function deriveVideoThumbnail(sourceUrl) {
 async function createMetadata(schedule) {
     const triggerNumber = schedule.triggerCount + 1;
     const fallbackTitle = `Scheduled Download ${triggerNumber}`;
-    return {
-        id: `scheduled-${schedule.id}-${triggerNumber}`,
-        sourceUrl: schedule.sourceUrl,
-        linkType: "video",
-        thumbnail: deriveVideoThumbnail(schedule.sourceUrl),
-        title: deriveVideoTitle(schedule.sourceUrl, fallbackTitle),
-        channelName: "Scheduled Queue",
-        duration: "10:24",
-        views: 128000,
-        qualityOptions: ["2160p", "1440p", "1080p", "720p", "480p"],
-        videoFormats: ["mp4", "webm", "mkv"],
-        audioFormats: ["mp3", "opus"],
-        resolution: "1080p",
-        fps: 60,
-        videoCodec: "H.264",
-        audioCodec: "AAC",
-        videoBitrate: "7.8 Mbps",
-        audioBitrate: "192 Kbps",
-        container: "mp4",
-        fileSize: 220 * 1024 * 1024,
-        uploadDate: "2026-08-01"
-    };
+    try {
+        const analyzed = await metadataService_1.metadataService.analyze(schedule.sourceUrl);
+        if (analyzed.linkType === "playlist") {
+            return analyzed.videos.map((video, index) => ({
+                ...video,
+                id: `scheduled-${schedule.id}-${triggerNumber}-${index + 1}`
+            }));
+        }
+        if (analyzed.linkType !== "channel") {
+            return [{
+                    ...analyzed,
+                    id: `scheduled-${schedule.id}-${triggerNumber}`
+                }];
+        }
+    }
+    catch {
+        // Fall back to URL-based metadata when analysis fails.
+    }
+    return [{
+            id: `scheduled-${schedule.id}-${triggerNumber}`,
+            sourceUrl: schedule.sourceUrl,
+            linkType: "video",
+            thumbnail: deriveVideoThumbnail(schedule.sourceUrl),
+            title: deriveVideoTitle(schedule.sourceUrl, fallbackTitle),
+            channelName: "Scheduled Queue",
+            duration: "10:24",
+            views: 128000,
+            qualityOptions: ["2160p", "1440p", "1080p", "720p", "480p"],
+            videoFormats: ["mp4", "webm", "mkv"],
+            audioFormats: ["mp3", "opus"],
+            resolution: "1080p",
+            fps: 60,
+            videoCodec: "H.264",
+            audioCodec: "AAC",
+            videoBitrate: "7.8 Mbps",
+            audioBitrate: "192 Kbps",
+            container: "mp4",
+            fileSize: 220 * 1024 * 1024,
+            uploadDate: "2026-08-01"
+        }];
 }
 class MockSchedulerService {
     constructor() {

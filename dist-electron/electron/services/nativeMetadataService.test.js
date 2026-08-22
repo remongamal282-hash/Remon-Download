@@ -227,6 +227,32 @@ const SAMPLE_CHANNEL_JSON = JSON.stringify({
             (0, vitest_1.expect)(mockExecutor.accessCalls[0]?.path).toBe("/custom/path/to/yt-dlp");
             (0, vitest_1.expect)(mockExecutor.spawnCalls[0]?.command).toBe("/custom/path/to/yt-dlp");
         });
+        (0, vitest_1.it)("uses bundled yt-dlp from process.resourcesPath before PATH", async () => {
+            const previousResourcesPath = process.resourcesPath;
+            Object.defineProperty(process, "resourcesPath", {
+                value: "C:\\Program Files\\Remon Download\\resources",
+                configurable: true
+            });
+            mockExecutor.setAccessBehavior(async (candidate) => {
+                if (candidate.endsWith("runtime\\yt-dlp.exe")) {
+                    return;
+                }
+                throw new Error("ENOENT");
+            });
+            mockExecutor.setSpawnBehavior(() => createSuccessProcess(SAMPLE_VIDEO_JSON));
+            try {
+                const service = new nativeMetadataService_1.NativeMetadataService(undefined, mockExecutor);
+                await service.analyze("https://www.youtube.com/watch?v=test");
+            }
+            finally {
+                Object.defineProperty(process, "resourcesPath", {
+                    value: previousResourcesPath,
+                    configurable: true
+                });
+            }
+            (0, vitest_1.expect)(mockExecutor.spawnCalls[0]?.command).toBe("C:\\Program Files\\Remon Download\\resources\\runtime\\yt-dlp.exe");
+            (0, vitest_1.expect)(mockExecutor.spawnCalls[0]?.args).toContain("--dump-single-json");
+        });
         (0, vitest_1.it)("falls back to PATH if Settings path is invalid", async () => {
             mockExecutor.setAccessBehavior(async () => {
                 throw new Error("ENOENT");
@@ -342,6 +368,20 @@ const SAMPLE_CHANNEL_JSON = JSON.stringify({
             (0, vitest_1.expect)(metadataCall?.args).toContain("--yes-playlist");
             (0, vitest_1.expect)(metadataCall?.args).toContain("--flat-playlist");
         });
+    });
+    (0, vitest_1.it)("derives a YouTube thumbnail when a playlist entry has no thumbnail", async () => {
+        mockExecutor.setSpawnBehavior(() => createSuccessProcess(JSON.stringify({
+            id: "PLxxxxxx",
+            title: "Playlist",
+            entries: [{ id: "video-without-thumbnail", title: "Video" }]
+        })));
+        mockExecutor.setAccessBehavior(async () => { });
+        const service = new nativeMetadataService_1.NativeMetadataService("yt-dlp", mockExecutor);
+        const result = await service.analyze("https://www.youtube.com/playlist?list=PLxxxxxx");
+        (0, vitest_1.expect)(result.linkType).toBe("playlist");
+        if (result.linkType === "playlist") {
+            (0, vitest_1.expect)(result.videos[0]?.thumbnail).toBe("https://i.ytimg.com/vi/video-without-thumbnail/hqdefault.jpg");
+        }
     });
     (0, vitest_1.describe)("Channel URL", () => {
         (0, vitest_1.beforeEach)(() => {

@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
 const path = __importStar(require("path"));
+const fs = __importStar(require("fs"));
 const handlers_1 = require("./ipc/handlers");
 const tray_1 = require("./tray");
 const schedulerBackground_1 = require("./schedulerBackground");
@@ -45,15 +46,86 @@ const sharedSchedulerService = new nativeSchedulerService_1.NativeSchedulerServi
 let nativeDownloadService = null;
 let nativeNotificationService = null;
 let schedulerLoop = null;
-const appIconPath = path.resolve(__dirname, "../../icon.png");
+let minimizeToTrayEnabled = false;
+let isQuitting = false;
+const settingsService = new nativeSettingsService_1.NativeSettingsService();
+function ensureTray(window) {
+    if (!window) {
+        return false;
+    }
+    if ((0, tray_1.hasTray)()) {
+        return true;
+    }
+    try {
+        (0, tray_1.createTray)(window);
+        return true;
+    }
+    catch (error) {
+        console.error("[Main] Could not create system tray:", error);
+        return false;
+    }
+}
+function hideToTray(window, event) {
+    if (!window || !ensureTray(window)) {
+        console.error("[Main] Tray is unavailable; keeping the window visible");
+        return false;
+    }
+    event?.preventDefault?.();
+    (0, tray_1.hideWindow)(window);
+    return true;
+}
+function minimizeWindow(window) {
+    if (!window) {
+        return;
+    }
+    if (minimizeToTrayEnabled) {
+        hideToTray(window);
+        return;
+    }
+    window.minimize();
+}
+function getAppIcon() {
+    const appPath = typeof electron_1.app.getAppPath === "function" ? electron_1.app.getAppPath() : process.cwd();
+    const candidates = [
+        path.join(appPath, "icon.ico"),
+        path.join(appPath, "icon.png"),
+        path.join(process.cwd(), "icon.ico"),
+        path.join(process.cwd(), "icon.png")
+    ];
+    if (process.resourcesPath && process.defaultApp !== true) {
+        candidates.push(path.join(process.resourcesPath, "app.asar", "icon.ico"), path.join(process.resourcesPath, "app.asar", "icon.png"), path.join(process.resourcesPath, "icon.ico"), path.join(process.resourcesPath, "icon.png"));
+    }
+    for (const candidate of candidates) {
+        try {
+            if (fs.existsSync(candidate)) {
+                const img = electron_1.nativeImage.createFromPath(candidate);
+                if (!img.isEmpty()) {
+                    return img;
+                }
+            }
+        }
+        catch {
+            // try next
+        }
+    }
+    return path.join(appPath, "icon.png");
+}
+// Set the Windows toast identity before any window or notification service is created.
+if (typeof electron_1.app.setName === "function") {
+    electron_1.app.setName("Remon Download");
+}
+if (process.platform === "win32" && typeof electron_1.app.setAppUserModelId === "function") {
+    electron_1.app.setAppUserModelId("com.remon.download");
+}
 function createWindow() {
+    const windowIcon = getAppIcon();
     mainWindow = new electron_1.BrowserWindow({
         width: 1200,
         height: 600,
         minWidth: 900,
         minHeight: 500,
         title: "Remon Download",
-        icon: appIconPath,
+        icon: windowIcon,
         autoHideMenuBar: true,
         titleBarStyle: "default",
         webPreferences: {
@@ -132,40 +204,87 @@ function createWindow() {
         },
         onNotificationServiceReady: (service) => {
             nativeNotificationService = service;
+        },
+        onMinimizeToTrayChanged: (enabled, window) => {
+            minimizeToTrayEnabled = enabled;
+            const targetWindow = window ?? mainWindow ?? electron_1.BrowserWindow.getAllWindows()[0] ?? null;
+            if (enabled) {
+                ensureTray(targetWindow);
+            }
+            else {
+                (0, tray_1.destroyTray)();
+                targetWindow.setSkipTaskbar(false);
+            }
+        },
+        onWindowMinimize: (window) => {
+            minimizeWindow(window);
         }
+    });
+    electron_1.app.on("browser-window-created", (_, createdWindow) => {
+        createdWindow.on("minimize", (event) => {
+            if (minimizeToTrayEnabled) {
+                if (hideToTray(createdWindow, event)) {
+                    console.log("[Main] Window minimize intercepted, hiding to tray");
+                }
+            }
+        });
+        createdWindow.on("restore", () => {
+            createdWindow.setSkipTaskbar(false);
+        });
     });
     const devServerUrl = process.env.VITE_DEV_SERVER_URL;
     if (devServerUrl) {
         void mainWindow.loadURL(devServerUrl);
     }
     else {
-        void mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
+        void mainWindow.loadFile(path.join(__dirname, "../../dist/index.html"));
     }
+    mainWindow.on("minimize", (event) => {
+        if (mainWindow && minimizeToTrayEnabled) {
+            if (hideToTray(mainWindow, event)) {
+                console.log("[Main] Window minimize intercepted, hiding to tray");
+            }
+        }
+    });
+    mainWindow.on("restore", () => {
+        if (mainWindow) {
+            mainWindow.setSkipTaskbar(false);
+        }
+    });
+    mainWindow.on("show", () => {
+        if (mainWindow) {
+            mainWindow.setSkipTaskbar(false);
+        }
+    });
     // Handle close: hide to tray instead of closing
     // This prevents the entire application from closing when user clicks X
     mainWindow.on("close", (event) => {
-        if (mainWindow) {
-            event.preventDefault();
-            (0, tray_1.hideWindow)(mainWindow);
-            console.log("[Main] Window close intercepted, hiding to tray");
+        if (mainWindow && minimizeToTrayEnabled && !isQuitting) {
+            if (hideToTray(mainWindow, event)) {
+                console.log("[Main] Window close intercepted, hiding to tray");
+            }
         }
     });
     mainWindow.on("closed", () => {
         mainWindow = null;
     });
 }
-electron_1.app.whenReady().then(() => {
+electron_1.app.whenReady().then(async () => {
     electron_1.app.setAppUserModelId("com.remon.download");
+    electron_1.app.setName("Remon Download");
+    await settingsService.initialize();
+    const settings = await settingsService.get();
+    minimizeToTrayEnabled = settings.minimizeToTray;
     createWindow();
-    // Create system tray after window is created
-    if (mainWindow) {
-        (0, tray_1.createTray)(mainWindow);
+    // Create a tray entry only when the user enabled minimize-to-tray.
+    if (mainWindow && minimizeToTrayEnabled) {
+        ensureTray(mainWindow);
     }
     electron_1.app.on("activate", () => {
         if (mainWindow === null) {
             createWindow();
-            if (mainWindow) {
-                (0, tray_1.createTray)(mainWindow);
+            if (mainWindow && minimizeToTrayEnabled) {
+                ensureTray(mainWindow);
             }
         }
         else {
@@ -173,23 +292,30 @@ electron_1.app.whenReady().then(() => {
             (0, tray_1.showWindow)(mainWindow);
         }
     });
+    electron_1.globalShortcut.register("CommandOrControl+Shift+R", () => {
+        if (mainWindow) {
+            (0, tray_1.showWindow)(mainWindow);
+        }
+    });
 });
 // Handle the event when user tries to close all windows
 electron_1.app.on("window-all-closed", () => {
-    // On Windows, don't quit the app when all windows are closed
-    // because the tray is still active and the app is still working
-    // Only quit when user explicitly selects Quit from the tray menu
-    if (process.platform !== "darwin") {
+    if (process.platform !== "darwin" && !minimizeToTrayEnabled) {
+        electron_1.app.quit();
+    }
+    else if (process.platform !== "darwin") {
         console.log("[Main] All windows closed, but app continues running (tray still active)");
     }
 });
 // Clean up tray before quitting
 electron_1.app.on("before-quit", () => {
+    isQuitting = true;
     console.log("[Main] App is quitting, destroying tray...");
     if (schedulerLoop) {
         schedulerLoop.stop();
         schedulerLoop = null;
     }
     (0, tray_1.destroyTray)();
+    electron_1.globalShortcut.unregister("CommandOrControl+Shift+R");
 });
 //# sourceMappingURL=main.js.map

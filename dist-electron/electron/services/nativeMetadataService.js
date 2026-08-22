@@ -30,12 +30,46 @@
  * - NativeMetadataService runs in Electron Main Process (Node.js, spawns yt-dlp)
  * - URL classification logic duplicated intentionally (process isolation)
  */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.NativeMetadataService = void 0;
 exports.isYouTubeUrl = isYouTubeUrl;
 exports.classifyYouTubeUrl = classifyYouTubeUrl;
 const child_process_1 = require("child_process");
 const promises_1 = require("fs/promises");
+const path = __importStar(require("path"));
 // ─── Configuration ──────────────────────────────────────────────────────────
 const YTDLP_TIMEOUT_MS = 15000; // 15 seconds - optimized for faster response
 const PLAYLIST_TIMEOUT_MS = 25000; // 25 seconds - playlists take longer
@@ -123,6 +157,44 @@ function classifyYouTubeUrl(url) {
     }
     return "video";
 }
+function getFormatHeight(format) {
+    if (typeof format.height === "number" && format.height > 0) {
+        return format.height;
+    }
+    if (typeof format.height === "string" && Number(format.height) > 0) {
+        return Number(format.height);
+    }
+    const candidates = [format.format_note, format.resolution];
+    for (const value of candidates) {
+        const match = String(value ?? "").match(/(?:x|\b)(\d{3,4})p?\b/i);
+        if (match) {
+            return Number(match[1]);
+        }
+    }
+    const formatIdMatch = String(format.format_id ?? "").match(/(?:x|\b)(\d{3,4})p\b/i);
+    if (formatIdMatch) {
+        return Number(formatIdMatch[1]);
+    }
+    return undefined;
+}
+let electronApp;
+try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    electronApp = require("electron").app;
+}
+catch {
+    // Test environment without electron
+}
+function bundledYtdlpCandidates() {
+    const candidates = [];
+    if (process.resourcesPath) {
+        candidates.push(path.join(process.resourcesPath, "runtime", "yt-dlp.exe"));
+    }
+    if (process.defaultApp === true || (electronApp && electronApp.isPackaged === false)) {
+        candidates.push(path.resolve(__dirname, "../../runtime/yt-dlp.exe"));
+    }
+    return Array.from(new Set(candidates.filter(Boolean)));
+}
 // ─── Metadata Parsers ───────────────────────────────────────────────────────
 function formatDuration(seconds) {
     if (!seconds || seconds <= 0)
@@ -142,28 +214,34 @@ function extractThumbnail(raw) {
     }
     return "";
 }
-function parseVideoMetadata(raw, linkType, index = 1) {
+function parseVideoMetadata(raw, linkType, index = 1, sourceUrl) {
     const videoId = raw.id ?? `unknown-${index}`;
     const formats = raw.formats ?? [];
+    const thumbnail = extractThumbnail(raw) || (videoId !== `unknown-${index}`
+        ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+        : "");
     // Extract available quality options
     const heights = new Set();
     formats.forEach((f) => {
-        if (f.height && f.height > 0) {
-            heights.add(f.height);
+        const height = getFormatHeight(f);
+        if (height && height > 0) {
+            heights.add(height);
         }
     });
-    const qualityOptions = Array.from(heights)
-        .sort((a, b) => b - a)
-        .map((h) => `${h}p`);
+    const sortedHeights = Array.from(heights).sort((a, b) => b - a);
+    const qualityOptions = sortedHeights.length > 0
+        ? sortedHeights.map((h) => `${h}p`)
+        : ["1080p", "720p", "480p", "360p", "240p", "144p"];
     const videoFormats = new Set(formats
         .map((f) => f.ext)
         .filter((ext) => !!ext)
         .filter((ext) => ["mp4", "webm", "mkv"].includes(ext)));
     const audioFormats = new Set(["mp3", "opus"]);
     // Best format info
-    const bestFormat = formats.find((f) => f.height && f.height > 0) ?? formats[0];
-    const resolution = bestFormat?.height
-        ? `${bestFormat.height}p`
+    const bestFormat = formats.find((f) => getFormatHeight(f)) ?? formats[0];
+    const bestFormatHeight = bestFormat ? getFormatHeight(bestFormat) : undefined;
+    const resolution = bestFormatHeight
+        ? `${bestFormatHeight}p`
         : "1080p";
     const fps = bestFormat?.fps ?? 30;
     const videoCodec = bestFormat?.vcodec ?? "H.264";
@@ -177,9 +255,11 @@ function parseVideoMetadata(raw, linkType, index = 1) {
     const fileSize = formatFileSize(bestFormat?.filesize ?? bestFormat?.filesize_approx);
     return {
         id: `yt-${linkType}-${videoId}`,
-        sourceUrl: raw.webpage_url ?? "",
+        sourceUrl: raw.webpage_url ?? sourceUrl ?? (videoId !== `unknown-${index}`
+            ? `https://www.youtube.com/watch?v=${videoId}`
+            : ""),
         linkType,
-        thumbnail: extractThumbnail(raw),
+        thumbnail,
         title: raw.title ?? "Unknown Title",
         channelName: raw.uploader ?? raw.channel ?? "Unknown Channel",
         duration: formatDuration(raw.duration),
@@ -205,10 +285,11 @@ function parseVideoMetadata(raw, linkType, index = 1) {
 function parsePlaylistMetadata(raw, url) {
     const playlistId = raw.id ?? "unknown-playlist";
     const entries = raw.entries ?? [];
-    // Parse first 10 videos for playlist preview
     const videos = entries
-        .slice(0, 10)
-        .map((entry, index) => parseVideoMetadata(entry, "playlist-video", index + 1));
+        .map((entry, index) => {
+        const entryUrl = entry.url?.startsWith("http") ? entry.url : undefined;
+        return parseVideoMetadata(entry, "playlist-video", index + 1, entryUrl);
+    });
     return {
         id: `yt-playlist-${playlistId}`,
         sourceUrl: url,
@@ -251,11 +332,22 @@ class NativeMetadataService {
         // Priority 1: Settings-provided path
         if (this.settingsYtdlpPath && this.settingsYtdlpPath.trim()) {
             try {
-                await this.executor.checkAccess(this.settingsYtdlpPath, promises_1.constants.X_OK);
+                await this.executor.checkAccess(this.settingsYtdlpPath, promises_1.constants.F_OK);
+                console.log(`[MetadataService] Resolved yt-dlp from settings: ${this.settingsYtdlpPath}`);
                 return this.settingsYtdlpPath;
             }
             catch {
                 // Invalid settings path - fall through to PATH
+            }
+        }
+        for (const candidate of bundledYtdlpCandidates()) {
+            try {
+                await this.executor.checkAccess(candidate, promises_1.constants.F_OK);
+                console.log(`[MetadataService] Resolved bundled yt-dlp path: ${candidate}`);
+                return candidate;
+            }
+            catch {
+                // Try the next bundled or PATH candidate.
             }
         }
         // Priority 2: System PATH (try common names)
@@ -280,26 +372,27 @@ class NativeMetadataService {
                         }
                     });
                 });
+                console.log(`[MetadataService] Resolved yt-dlp from system PATH: ${candidate}`);
                 return candidate;
             }
             catch {
                 // Try next candidate
             }
         }
+        console.error("[MetadataService] Could not resolve yt-dlp executable from any candidate path");
         throw new Error("ytdlp_not_found");
     }
     /**
      * Spawns yt-dlp process and returns parsed JSON output.
      * Optimized for speed with faster options.
      */
-    async executeYtdlp(ytdlpPath, url, isPlaylist = false) {
+    async executeYtdlp(ytdlpPath, url, isPlaylist = false, extractorArg) {
         return new Promise((resolve, reject) => {
             const args = [
                 "--dump-single-json",
                 isPlaylist ? "--yes-playlist" : "--no-playlist",
-                ...(isPlaylist
-                    ? ["--flat-playlist", "--playlist-items", "1-5"]
-                    : []), // Only first 5 videos for fast preview
+                ...(isPlaylist ? ["--flat-playlist"] : []),
+                ...(extractorArg ? ["--extractor-args", extractorArg] : []),
                 "--skip-download",
                 "--no-warnings",
                 url
@@ -320,6 +413,7 @@ class NativeMetadataService {
                 stderr += data.toString();
             });
             proc.on("error", (err) => {
+                console.error(`[MetadataService] yt-dlp process spawn error (${ytdlpPath}):`, err);
                 if (err.code === "ETIMEDOUT") {
                     reject(new Error("ytdlp_timeout"));
                 }
@@ -336,11 +430,13 @@ class NativeMetadataService {
                         const parsed = JSON.parse(stdout);
                         resolve(parsed);
                     }
-                    catch {
+                    catch (jsonErr) {
+                        console.error(`[MetadataService] Failed to parse yt-dlp output JSON (${ytdlpPath}):`, jsonErr, `stdout:`, stdout.slice(0, 300));
                         reject(new Error("ytdlp_invalid_json"));
                     }
                 }
                 else {
+                    console.error(`[MetadataService] yt-dlp exited with non-zero code ${code}. Path: ${ytdlpPath}, Stderr:`, stderr);
                     // Map common yt-dlp error messages
                     const stderrLower = stderr.toLowerCase();
                     if (stderrLower.includes("private video") ||
@@ -364,6 +460,43 @@ class NativeMetadataService {
                 }
             });
         });
+    }
+    isRetryableYtdlpFailure(error) {
+        const message = String(error).toLowerCase();
+        return [
+            "video unavailable",
+            "not available",
+            "private video",
+            "members-only",
+            "network",
+            "connection",
+            "ytdlp_failed",
+            "ytdlp_timeout",
+            "unsupported_url"
+        ].some((token) => message.includes(token));
+    }
+    async executeYtdlpWithFallback(ytdlpPath, url, isPlaylist = false) {
+        const extractorArgCandidates = [
+            undefined,
+            "youtube:player_client=web",
+            "youtube:player_client=android",
+            "youtube:player_client=ios",
+            "youtube:player_client=web_safari",
+            "youtube:player_client=tv_embedded",
+        ];
+        let lastError = null;
+        for (const extractorArg of extractorArgCandidates) {
+            try {
+                return await this.executeYtdlp(ytdlpPath, url, isPlaylist, extractorArg);
+            }
+            catch (error) {
+                lastError = error;
+                if (!this.isRetryableYtdlpFailure(error)) {
+                    throw error;
+                }
+            }
+        }
+        throw lastError ?? new Error("ytdlp_failed");
     }
     /**
      * Analyzes a YouTube URL using yt-dlp and returns typed AnalysisResult.
@@ -403,7 +536,7 @@ class NativeMetadataService {
         let result;
         // Handle different link types
         if (linkType === "playlist" || linkType === "channel") {
-            const raw = await this.executeYtdlp(this.ytdlpPath, trimmedUrl, true);
+            const raw = await this.executeYtdlpWithFallback(this.ytdlpPath, trimmedUrl, true);
             if (linkType === "playlist") {
                 result = parsePlaylistMetadata(raw, trimmedUrl);
             }
@@ -413,7 +546,7 @@ class NativeMetadataService {
         }
         else {
             // video | shorts | playlist-video
-            const raw = await this.executeYtdlp(this.ytdlpPath, trimmedUrl, false);
+            const raw = await this.executeYtdlpWithFallback(this.ytdlpPath, trimmedUrl, false);
             result = parseVideoMetadata(raw, linkType, 1);
         }
         // 💾 Cache the result for future requests (shared cache)

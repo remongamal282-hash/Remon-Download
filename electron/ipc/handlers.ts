@@ -194,11 +194,14 @@ export function registerIpcHandlers(options: RegisterIpcHandlersOptions = {}): v
   // Metadata - creates new instance per request to use latest settings
   ipcMain.handle(IPC_CHANNELS.METADATA_ANALYZE, async (_, { url }) => {
     try {
+      console.log(`[IPC] METADATA_ANALYZE requested for URL: ${url}`);
       const settings = await settingsService.get();
       const metadataService = new NativeMetadataService(settings.ytdlpPath);
       const data = await metadataService.analyze(url);
+      console.log(`[IPC] METADATA_ANALYZE succeeded for URL: ${url}`);
       return wrapSuccess(data);
     } catch (err) {
+      console.error(`[IPC] METADATA_ANALYZE failed for URL (${url}):`, err);
       return wrapError(err);
     }
   });

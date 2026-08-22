@@ -586,6 +586,15 @@ describe("Download IPC Integration", () => {
       settings.concurrentDownloads = 2;
       service = new NativeDownloadService(settings, mockExecutor);
 
+      // Use a long delay so downloads stay active when the third start is attempted
+      mockExecutor.setAccessBehavior("yt-dlp", true);
+      mockExecutor.setSpawnBehavior("yt-dlp", {
+        stdout: "download:50000|100000|25000|00:02\n",
+        stderr: "",
+        exitCode: 0,
+        delay: 5000
+      });
+
       const item1 = createMockDownloadItem({ status: "analyzing" });
       const item2 = createMockDownloadItem({ status: "analyzing" });
       const item3 = createMockDownloadItem({ status: "analyzing" });

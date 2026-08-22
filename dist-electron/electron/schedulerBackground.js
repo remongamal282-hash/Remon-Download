@@ -91,40 +91,56 @@ class SchedulerBackgroundLoop {
             this.tickInFlight = false;
         }
     }
-    async executeTriggeredTask(schedule, metadata) {
+    async executeTriggeredTask(schedule, metadataItems) {
         const downloadService = this.getDownloadService();
         if (!downloadService) {
             this.logger.warn(`[Main] scheduler task skipped because download service is unavailable: ${schedule.id}`);
             return;
         }
         this.attachDownloadListener(downloadService);
-        const itemId = `${schedule.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const item = {
-            id: itemId,
-            metadataId: metadata.id,
-            thumbnail: metadata.thumbnail,
-            title: metadata.title,
-            sourceUrl: metadata.sourceUrl,
-            quality: "auto",
-            format: "mp4",
-            fileSize: metadata.fileSize,
-            downloadedSize: 0,
-            speed: 0,
-            eta: "--",
-            progress: 0,
-            status: "queued",
-            order: 0,
-            addedAt: new Date().toISOString(),
-            phaseStartedAt: Date.now(),
-            lastUpdatedAt: Date.now(),
-            retryCount: 0,
-        };
-        this.logger.log(`[Main] scheduled download started: ${item.id} for ${schedule.id}`);
-        await downloadService.add(item);
-        this.scheduledDownloadIds.set(item.id, { schedule, item });
-        this.getNotificationService()?.notifyScheduledDownload(schedule, metadata);
-        await downloadService.start(item.id);
-        this.logger.log(`[Main] scheduled task completed: ${schedule.id}`);
+        this.getNotificationService()?.notifyScheduledDownload(schedule, metadataItems[0]);
+        for (const metadata of metadataItems) {
+            const itemId = `${schedule.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const item = {
+                id: itemId,
+                metadataId: metadata.id,
+                thumbnail: metadata.thumbnail,
+                title: metadata.title,
+                sourceUrl: metadata.sourceUrl,
+                quality: "auto",
+                format: "mp4",
+                fileSize: metadata.fileSize,
+                downloadedSize: 0,
+                speed: 0,
+                eta: "--",
+                progress: 0,
+                status: "queued",
+                order: 0,
+                addedAt: new Date().toISOString(),
+                phaseStartedAt: Date.now(),
+                lastUpdatedAt: Date.now(),
+                retryCount: 0,
+            };
+            this.logger.log(`[Main] scheduled download started: ${item.id} for ${schedule.id}`);
+            await downloadService.add(item);
+            this.scheduledDownloadIds.set(item.id, { schedule, item });
+            try {
+                await downloadService.start(item.id);
+                const tracked = this.scheduledDownloadIds.get(item.id);
+                if (tracked) {
+                    tracked.item = { ...tracked.item, status: "downloading" };
+                    this.scheduledDownloadIds.set(item.id, tracked);
+                }
+            }
+            catch (error) {
+                if (error instanceof Error && error.message === "Concurrent download limit reached") {
+                    this.logger.log(`[Main] scheduled download queued until a slot is available: ${item.id}`);
+                    continue;
+                }
+                throw error;
+            }
+        }
+        this.logger.log(`[Main] scheduled task completed: ${schedule.id} (${metadataItems.length} item(s))`);
     }
     attachDownloadListener(downloadService) {
         if (this.downloadListenerAttached || typeof downloadService.on !== "function") {
@@ -146,6 +162,7 @@ class SchedulerBackgroundLoop {
                 lastUpdatedAt: Date.now()
             };
             this.getNotificationService()?.handleDownloadStateChange(payload, updatedItem);
+            void this.startNextQueuedDownload(downloadService);
             void this.schedulerService.update({
                 ...trackedDownload.schedule,
                 status: payload.status === "completed" ? "completed" : "failed",
@@ -154,6 +171,25 @@ class SchedulerBackgroundLoop {
             });
         });
         this.downloadListenerAttached = true;
+    }
+    async startNextQueuedDownload(downloadService) {
+        const queued = Array.from(this.scheduledDownloadIds.entries())
+            .find(([, tracked]) => tracked.item.status === "queued");
+        if (!queued) {
+            return;
+        }
+        const [itemId, tracked] = queued;
+        try {
+            await downloadService.start(itemId);
+            tracked.item = { ...tracked.item, status: "downloading" };
+            this.scheduledDownloadIds.set(itemId, tracked);
+            this.logger.log(`[Main] started queued scheduled download: ${itemId}`);
+        }
+        catch (error) {
+            if (!(error instanceof Error && error.message === "Concurrent download limit reached")) {
+                this.logger.error(`[Main] queued scheduled download failed to start: ${itemId}`, error);
+            }
+        }
     }
 }
 exports.SchedulerBackgroundLoop = SchedulerBackgroundLoop;

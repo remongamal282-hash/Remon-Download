@@ -11,7 +11,7 @@
  */
 
 import { contextBridge, ipcRenderer } from "electron";
-import { IPC_CHANNELS, IPC_EVENTS, type IpcResult } from "./ipc/channels";
+import { IPC_CHANNELS, IPC_EVENTS, type IpcResult, type NotificationPayload } from "./ipc/channels";
 import type { AnalysisResult, DownloadItem, FavoriteItem, HistoryItem, ScheduledDownload } from "../src/types/download";
 import type { AppSettings } from "../src/types/settings";
 import type { ElectronAPI } from "../src/types/electron";
@@ -29,6 +29,12 @@ async function invoke<T>(channel: string, payload?: unknown): Promise<T> {
 
 const electronAPI: ElectronAPI = {
   isElectron: true,
+
+  onNotification: (callback: (data: NotificationPayload) => void): (() => void) => {
+    const listener = (_event: unknown, data: NotificationPayload) => callback(data);
+    ipcRenderer.on(IPC_EVENTS.NOTIFICATION, listener);
+    return () => ipcRenderer.removeListener(IPC_EVENTS.NOTIFICATION, listener);
+  },
 
   metadata: {
     analyze: (url: string): Promise<AnalysisResult> =>

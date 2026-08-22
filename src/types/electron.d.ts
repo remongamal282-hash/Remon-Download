@@ -63,6 +63,8 @@ export interface ElectronAPI {
     onStateChange(callback: (data: DownloadStateChangePayload) => void): () => void;
   };
 
+  onNotification(callback: (data: { title: string; body: string; thumbnail?: string }) => void): () => void;
+
   settings: {
     get(): Promise<AppSettings>;
     update(settings: Partial<AppSettings>): Promise<AppSettings>;

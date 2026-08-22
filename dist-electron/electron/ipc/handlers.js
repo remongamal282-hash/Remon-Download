@@ -169,12 +169,15 @@ function registerIpcHandlers(options = {}) {
     // Metadata - creates new instance per request to use latest settings
     electron_1.ipcMain.handle(channels_1.IPC_CHANNELS.METADATA_ANALYZE, async (_, { url }) => {
         try {
+            console.log(`[IPC] METADATA_ANALYZE requested for URL: ${url}`);
             const settings = await settingsService.get();
             const metadataService = new nativeMetadataService_1.NativeMetadataService(settings.ytdlpPath);
             const data = await metadataService.analyze(url);
+            console.log(`[IPC] METADATA_ANALYZE succeeded for URL: ${url}`);
             return wrapSuccess(data);
         }
         catch (err) {
+            console.error(`[IPC] METADATA_ANALYZE failed for URL (${url}):`, err);
             return wrapError(err);
         }
     });
@@ -290,6 +293,10 @@ function registerIpcHandlers(options = {}) {
                 downloadService.updateSettings(data);
             }
             notificationService?.updateSettings(data);
+            const focusedWindow = electron_1.BrowserWindow.getFocusedWindow();
+            if (focusedWindow) {
+                options.onMinimizeToTrayChanged?.(data.minimizeToTray, focusedWindow);
+            }
             return wrapSuccess(data);
         }
         catch (err) {
@@ -303,6 +310,10 @@ function registerIpcHandlers(options = {}) {
                 downloadService.updateSettings(data);
             }
             notificationService?.updateSettings(data);
+            const focusedWindow = electron_1.BrowserWindow.getFocusedWindow();
+            if (focusedWindow) {
+                options.onMinimizeToTrayChanged?.(data.minimizeToTray, focusedWindow);
+            }
             return wrapSuccess(data);
         }
         catch (err) {
@@ -312,7 +323,7 @@ function registerIpcHandlers(options = {}) {
     electron_1.ipcMain.handle(channels_1.IPC_CHANNELS.WINDOW_MINIMIZE, async () => {
         const focusedWindow = electron_1.BrowserWindow.getFocusedWindow();
         if (focusedWindow) {
-            focusedWindow.minimize();
+            options.onWindowMinimize?.(focusedWindow);
         }
         return wrapSuccess(undefined);
     });
@@ -487,7 +498,7 @@ function registerIpcHandlers(options = {}) {
             notificationService = notificationService ?? new nativeNotificationService_1.NativeNotificationService(settings);
             notificationService.updateSettings(settings);
             data.triggered.forEach(({ schedule, metadata }) => {
-                notificationService?.notifyScheduledDownload(schedule, metadata);
+                notificationService?.notifyScheduledDownload(schedule, metadata[0]);
             });
             return wrapSuccess(data);
         }
