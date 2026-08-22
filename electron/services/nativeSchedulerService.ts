@@ -13,7 +13,7 @@
  */
 import type { ScheduledDownload, ScheduleRepeat, ScheduledDownloadStatus, VideoMetadata } from '../../src/types/download';
 import { readJsonFile, writeJsonFile } from '../utils/fileStorage';
-import { NativeMetadataService } from './nativeMetadataService';
+import { isYouTubeUrl, NativeMetadataService } from './nativeMetadataService';
 
 interface SchedulerFileFormat {
   version: string;
@@ -288,8 +288,13 @@ export class NativeSchedulerService {
           id: `scheduled-${schedule.id}-${triggerNumber}`,
         }];
       }
-    } catch {
-      // Fall back to URL-based metadata when the yt-dlp lookup fails.
+    } catch (error) {
+      if (isYouTubeUrl(schedule.sourceUrl)) {
+        console.error(`[Scheduler] Metadata analysis failed for ${schedule.sourceUrl}:`, error);
+        throw error;
+      }
+
+      // Keep legacy non-YouTube test/custom URLs usable without pretending they are real metadata.
     }
 
     const title = (() => {

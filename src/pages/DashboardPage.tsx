@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import type { AnalysisResult, VideoMetadata } from "../types/download";
 import { formatBytes } from "../utils/format";
+import { getYouTubeThumbnailFallback } from "../utils/thumbnail";
 import { quickAddSchema, type QuickAddFormValues } from "../utils/urlValidation";
 import { useMetadataStore } from "../stores/metadataStore";
 import { useQueueStore } from "../stores/queueStore";
@@ -302,7 +303,19 @@ function AnalysisPanel({
   return (
     <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="flex gap-4">
-        <img className="aspect-video w-48 rounded-md object-cover" src={result.thumbnail} alt="" />
+        <img
+          className="aspect-video w-48 rounded-md object-cover"
+          src={result.thumbnail || getYouTubeThumbnailFallback(result.sourceUrl) || ""}
+          alt=""
+          onError={(event) => {
+            const fallback = getYouTubeThumbnailFallback(result.sourceUrl);
+            if (fallback && event.currentTarget.src !== fallback) {
+              event.currentTarget.src = fallback;
+            } else {
+              event.currentTarget.onerror = null;
+            }
+          }}
+        />
         <div className="min-w-0 flex-1">
           <p className="text-xs font-semibold uppercase text-brand-700 dark:text-brand-50">
             {t("dashboard.detected")}: {result.linkType}
@@ -401,7 +414,19 @@ function SelectableResult({
   return (
     <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="flex items-start gap-4">
-        <img className="h-28 w-40 rounded-md object-cover" src={thumbnail} alt="" />
+        <img
+          className="h-28 w-40 rounded-md object-cover"
+          src={thumbnail || getYouTubeThumbnailFallback(videos[0]?.sourceUrl ?? "") || ""}
+          alt=""
+          onError={(event) => {
+            const fallback = getYouTubeThumbnailFallback(videos[0]?.sourceUrl ?? "");
+            if (fallback && event.currentTarget.src !== fallback) {
+              event.currentTarget.src = fallback;
+            } else {
+              event.currentTarget.onerror = null;
+            }
+          }}
+        />
         <div className="min-w-0 flex-1">
           <p className="text-xs font-semibold uppercase text-brand-700 dark:text-brand-50">
             {t("dashboard.detected")}
@@ -442,7 +467,19 @@ function SelectableResult({
               onChange={() => onToggleSelected(video.id)}
               className="h-4 w-4 rounded border-slate-300 text-brand-600"
             />
-            <img className="aspect-video w-24 rounded object-cover" src={video.thumbnail} alt="" />
+            <img
+              className="aspect-video w-24 rounded object-cover"
+              src={video.thumbnail || getYouTubeThumbnailFallback(video.sourceUrl) || ""}
+              alt=""
+              onError={(event) => {
+                const fallback = getYouTubeThumbnailFallback(video.sourceUrl);
+                if (fallback && event.currentTarget.src !== fallback) {
+                  event.currentTarget.src = fallback;
+                } else {
+                  event.currentTarget.onerror = null;
+                }
+              }}
+            />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-medium">{video.title}</span>
               <span className="block text-xs text-slate-500 dark:text-slate-400">

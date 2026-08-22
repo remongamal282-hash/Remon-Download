@@ -252,7 +252,7 @@ function parsePlaylistMetadata(raw, url) {
   const entries = raw.entries ?? [];
   const playlistThumbnail = extractThumbnail(raw);
   const videos = entries.map((entry, index) => {
-    const entryUrl = entry.url?.startsWith("http") ? entry.url : void 0;
+    const entryUrl = entry.url?.startsWith("http") ? entry.url : entry.id ? `https://www.youtube.com/watch?v=${entry.id}` : void 0;
     const video = parseVideoMetadata(entry, "playlist-video", index + 1, entryUrl);
     return video.thumbnail ? video : { ...video, thumbnail: playlistThumbnail };
   });
@@ -288,6 +288,7 @@ var NativeMetadataService = class {
   }
   settingsYtdlpPath;
   ytdlpPath = null;
+  inFlightAnalyses = /* @__PURE__ */ new Map();
   metadataCache = new MetadataCache(
     100,
     1e3 * 60 * 60
@@ -364,6 +365,7 @@ var NativeMetadataService = class {
         url
       ];
       const timeout = isPlaylist ? PLAYLIST_TIMEOUT_MS : YTDLP_TIMEOUT_MS;
+      console.log(`[MetadataService] yt-dlp start type=${isPlaylist ? "playlist" : "video"} path=${ytdlpPath} timeoutMs=${timeout} args=${JSON.stringify(args.map((arg) => arg === url ? "<url>" : arg))}`);
       const proc = this.executor.spawn(
         ytdlpPath,
         args,
@@ -381,7 +383,7 @@ var NativeMetadataService = class {
         stderr += data.toString();
       });
       proc.on("error", (err) => {
-        console.error(`[MetadataService] yt-dlp process spawn error (${ytdlpPath}):`, err);
+        console.error(`[MetadataService] yt-dlp process error path=${ytdlpPath} code=${err.code ?? "unknown"} stderr=${stderr.slice(0, 4e3)}`, err);
         if (err.code === "ETIMEDOUT") {
           reject(new Error("ytdlp_timeout"));
         } else if (err.code === "ENOENT") {
@@ -391,6 +393,7 @@ var NativeMetadataService = class {
         }
       });
       proc.on("exit", (code) => {
+        console.log(`[MetadataService] yt-dlp exit code=${code} path=${ytdlpPath} stderr=${stderr.slice(0, 4e3)}`);
         if (code === 0) {
           try {
             const parsed = JSON.parse(
@@ -398,11 +401,11 @@ var NativeMetadataService = class {
             );
             resolve4(parsed);
           } catch (jsonErr) {
-            console.error(`[MetadataService] Failed to parse yt-dlp output JSON (${ytdlpPath}):`, jsonErr, `stdout:`, stdout.slice(0, 300));
+            console.error(`[MetadataService] Failed to parse yt-dlp JSON path=${ytdlpPath} stdout=${stdout.slice(0, 1e3)}`, jsonErr);
             reject(new Error("ytdlp_invalid_json"));
           }
         } else {
-          console.error(`[MetadataService] yt-dlp exited with non-zero code ${code}. Path: ${ytdlpPath}, Stderr:`, stderr);
+          console.error(`[MetadataService] yt-dlp failed code=${code} path=${ytdlpPath} stderr=${stderr.slice(0, 4e3)}`);
           const stderrLower = stderr.toLowerCase();
           if (stderrLower.includes("private video") || stderrLower.includes("members-only")) {
             reject(new Error("video_private"));
@@ -481,10 +484,27 @@ var NativeMetadataService = class {
       );
       return cachedResult;
     }
+    const inFlight = this.inFlightAnalyses.get(trimmedUrl);
+    if (inFlight) {
+      console.log(`[MetadataService] Reusing in-flight analysis for ${trimmedUrl}`);
+      return inFlight;
+    }
+    const analysis = this.analyzeUncached(trimmedUrl);
+    this.inFlightAnalyses.set(trimmedUrl, analysis);
+    try {
+      return await analysis;
+    } finally {
+      if (this.inFlightAnalyses.get(trimmedUrl) === analysis) {
+        this.inFlightAnalyses.delete(trimmedUrl);
+      }
+    }
+  }
+  async analyzeUncached(trimmedUrl) {
     if (!this.ytdlpPath) {
       this.ytdlpPath = await this.resolveYtdlpPath();
     }
     const linkType = classifyYouTubeUrl(trimmedUrl);
+    console.log(`[MetadataService] Analyzing ${linkType} URL with resolved path ${this.ytdlpPath}`);
     let result;
     if (linkType === "playlist" || linkType === "channel") {
       const raw = await this.executeYtdlpWithFallback(
@@ -2534,7 +2554,11 @@ var NativeSchedulerService = class {
           id: `scheduled-${schedule.id}-${triggerNumber}`
         }];
       }
-    } catch {
+    } catch (error) {
+      if (isYouTubeUrl(schedule.sourceUrl)) {
+        console.error(`[Scheduler] Metadata analysis failed for ${schedule.sourceUrl}:`, error);
+        throw error;
+      }
     }
     const title = (() => {
       try {
@@ -2771,6 +2795,30 @@ var import_electron2 = require("electron");
 var import_child_process3 = require("child_process");
 var import_fs3 = require("fs");
 var path3 = __toESM(require("path"), 1);
+var import_url = require("url");
+
+// src/utils/thumbnail.ts
+function getYouTubeThumbnailFallback(sourceUrl) {
+  try {
+    const url = new URL(sourceUrl);
+    let videoId = "";
+    if (url.hostname.toLowerCase() === "youtu.be") {
+      videoId = url.pathname.slice(1).split("/")[0] ?? "";
+    } else {
+      const shortsMatch = url.pathname.match(/\/shorts\/([^/?]+)/i);
+      const embedMatch = url.pathname.match(/\/embed\/([^/?]+)/i);
+      videoId = url.searchParams.get("v") ?? shortsMatch?.[1] ?? embedMatch?.[1] ?? "";
+    }
+    if (!/^[A-Za-z0-9_-]{6,}$/.test(videoId)) {
+      return null;
+    }
+    return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+  } catch {
+    return null;
+  }
+}
+
+// electron/services/nativeNotificationService.ts
 function escapeXml(value) {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
@@ -2786,7 +2834,8 @@ async function showWindowsToast(title, body, thumbnail) {
     `remon-download-${Date.now()}-${Math.random().toString(16).slice(2)}.jpg`
   );
   await import_fs3.promises.writeFile(imagePath, thumbnail);
-  const xml = `<toast><visual><binding template="ToastGeneric"><image placement="appLogoOverride" hint-crop="circle" src="file:///${escapeXml(imagePath.replace(/\\/g, "/"))}"/><text>${escapeXml(title)}</text><text>${escapeXml(body)}</text></binding></visual></toast>`;
+  const imageUri = (0, import_url.pathToFileURL)(imagePath).toString();
+  const xml = `<toast><visual><binding template="ToastGeneric"><image placement="appLogoOverride" hint-crop="circle" src="${escapeXml(imageUri)}"/><text>${escapeXml(title)}</text><text>${escapeXml(body)}</text></binding></visual></toast>`;
   const script = `Add-Type -AssemblyName System.Runtime.WindowsRuntime; $xml = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]::new(); $xml.LoadXml('${escapePowerShell(xml)}'); $toast = [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime]::new($xml); [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]::CreateToastNotifier('com.remon.download').Show($toast)`;
   const encodedScript = Buffer.from(script, "utf16le").toString("base64");
   try {
@@ -2799,7 +2848,10 @@ async function showWindowsToast(title, body, thumbnail) {
       );
     });
   } finally {
-    await import_fs3.promises.unlink(imagePath).catch(() => void 0);
+    const cleanupTimer = setTimeout(() => {
+      void import_fs3.promises.unlink(imagePath).catch(() => void 0);
+    }, 5 * 60 * 1e3);
+    cleanupTimer.unref?.();
   }
 }
 var NativeNotificationService = class {
@@ -2826,7 +2878,8 @@ var NativeNotificationService = class {
       this.sendDownloadOnce(`completed:${payload.id}`, {
         title: item.title || "Remon Download",
         body: this.settings.language === "ar" ? "\u062A\u0645 \u062A\u062D\u0645\u064A\u0644 \u0627\u0644\u0641\u064A\u062F\u064A\u0648 \u0628\u0646\u062C\u0627\u062D" : "Download completed successfully",
-        thumbnail: item.thumbnail
+        thumbnail: item.thumbnail || void 0,
+        sourceUrl: item.sourceUrl
       });
       return;
     }
@@ -2896,7 +2949,8 @@ var NativeNotificationService = class {
     this.sendDownloadOnce(`scheduled:${schedule.id}:${schedule.triggerCount}`, {
       title: metadata?.title || "Remon Download",
       body: this.settings.language === "ar" ? "\u062A\u0645\u062A \u0625\u0636\u0627\u0641\u0629 \u0627\u0644\u062A\u062D\u0645\u064A\u0644 \u0627\u0644\u0645\u062C\u062F\u0648\u0644 \u0625\u0644\u0649 \u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u062A\u0646\u0632\u064A\u0644\u0627\u062A" : "Scheduled download queued",
-      thumbnail: metadata?.thumbnail
+      thumbnail: metadata?.thumbnail,
+      sourceUrl: metadata?.sourceUrl
     });
   }
   sendOnce(key, options) {
@@ -2946,18 +3000,29 @@ var NativeNotificationService = class {
         ];
         let iconImage;
         let thumbnailBuffer;
-        if (options.thumbnail) {
+        const thumbnailCandidates = Array.from(new Set([
+          options.thumbnail
+        ].filter((thumbnail) => Boolean(thumbnail))));
+        const fallbackThumbnail = options.sourceUrl ? getYouTubeThumbnailFallback(options.sourceUrl) : null;
+        if (fallbackThumbnail && !thumbnailCandidates.includes(fallbackThumbnail)) {
+          thumbnailCandidates.push(fallbackThumbnail);
+        }
+        for (const thumbnail of thumbnailCandidates) {
           try {
-            const response = await fetch(options.thumbnail);
-            if (response.ok) {
-              thumbnailBuffer = Buffer.from(await response.arrayBuffer());
-              const image = import_electron2.nativeImage.createFromBuffer(
-                thumbnailBuffer
-              );
-              if (!image.isEmpty()) {
-                iconImage = image;
-              }
+            const response = await fetch(thumbnail, {
+              headers: { "user-agent": "Mozilla/5.0" }
+            });
+            if (!response.ok) {
+              continue;
             }
+            const candidateBuffer = Buffer.from(await response.arrayBuffer());
+            const image = import_electron2.nativeImage.createFromBuffer(candidateBuffer);
+            if (image.isEmpty()) {
+              continue;
+            }
+            thumbnailBuffer = candidateBuffer;
+            iconImage = image;
+            break;
           } catch (error) {
             console.warn(`[Notification] Could not load thumbnail for ${key}:`, error);
           }
@@ -3584,6 +3649,7 @@ var SchedulerBackgroundLoop = class {
   pollMs;
   getNotificationService;
   logger;
+  getSettings;
   timer = null;
   running = false;
   tickInFlight = false;
@@ -3595,6 +3661,19 @@ var SchedulerBackgroundLoop = class {
     this.schedulerService = options.schedulerService ?? new NativeSchedulerService();
     this.getDownloadService = options.getDownloadService ?? (() => null);
     this.getNotificationService = options.getNotificationService ?? (() => null);
+    this.getSettings = options.getSettings ?? (async () => {
+      try {
+        const settingsService2 = new NativeSettingsService();
+        await settingsService2.initialize();
+        const settings = await settingsService2.get();
+        return {
+          defaultQuality: settings.defaultQuality,
+          defaultVideoFormat: settings.defaultVideoFormat
+        };
+      } catch {
+        return { defaultQuality: "720p", defaultVideoFormat: "mp4" };
+      }
+    });
     this.pollMs = options.pollMs ?? 1e3;
     this.logger = options.logger ?? console;
   }
@@ -3674,6 +3753,7 @@ var SchedulerBackgroundLoop = class {
       this.logger.warn(`[Main] scheduler task skipped because download service is unavailable: ${schedule.id}`);
       return;
     }
+    const settings = await this.getSettings();
     this.attachDownloadListener(downloadService);
     this.getNotificationService()?.notifyScheduledDownload(schedule, metadataItems[0]);
     for (const metadata of metadataItems) {
@@ -3684,8 +3764,8 @@ var SchedulerBackgroundLoop = class {
         thumbnail: metadata.thumbnail,
         title: metadata.title,
         sourceUrl: metadata.sourceUrl,
-        quality: metadata.qualityOptions[0] ?? metadata.resolution ?? "720p",
-        format: "mp4",
+        quality: settings.defaultQuality,
+        format: settings.defaultVideoFormat,
         fileSize: metadata.fileSize,
         downloadedSize: 0,
         speed: 0,
@@ -3878,9 +3958,15 @@ function createWindow() {
       schedulerService: sharedSchedulerService,
       getDownloadService: () => nativeDownloadService,
       getNotificationService: () => nativeNotificationService,
+      getSettings: async () => {
+        const settings = await settingsService2.get();
+        return {
+          defaultQuality: settings.defaultQuality,
+          defaultVideoFormat: settings.defaultVideoFormat
+        };
+      },
       logger: console
     });
-    schedulerLoop.start();
   }
   mainWindow.setMenuBarVisibility(false);
   mainWindow.setAutoHideMenuBar(true);
@@ -3929,6 +4015,7 @@ function createWindow() {
     schedulerService: sharedSchedulerService,
     onDownloadServiceReady: (service) => {
       nativeDownloadService = service;
+      schedulerLoop?.start();
     },
     onNotificationServiceReady: (service) => {
       nativeNotificationService = service;

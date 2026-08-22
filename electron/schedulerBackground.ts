@@ -2,12 +2,14 @@ import type { DownloadItem, ScheduledDownload, VideoMetadata } from "../src/type
 import { NativeDownloadService } from "./services/nativeDownloadService";
 import { NativeSchedulerService } from "./services/nativeSchedulerService";
 import { NativeNotificationService } from "./services/nativeNotificationService";
+import { NativeSettingsService } from "./services/nativeSettingsService";
 import type { DownloadStateChangePayload } from "./ipc/channels";
 
 export interface SchedulerBackgroundLoopOptions {
   schedulerService?: NativeSchedulerService;
   getDownloadService?: () => NativeDownloadService | null;
   getNotificationService?: () => NativeNotificationService | null;
+  getSettings?: () => Promise<{ defaultQuality: string; defaultVideoFormat: string }>;
   pollMs?: number;
   logger?: Pick<Console, "log" | "warn" | "error">;
 }
@@ -18,6 +20,7 @@ export class SchedulerBackgroundLoop {
   private readonly pollMs: number;
   private readonly getNotificationService: () => NativeNotificationService | null;
   private readonly logger: Pick<Console, "log" | "warn" | "error">;
+  private readonly getSettings: () => Promise<{ defaultQuality: string; defaultVideoFormat: string }>;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private tickInFlight = false;
@@ -30,6 +33,19 @@ export class SchedulerBackgroundLoop {
     this.schedulerService = options.schedulerService ?? new NativeSchedulerService();
     this.getDownloadService = options.getDownloadService ?? (() => null);
     this.getNotificationService = options.getNotificationService ?? (() => null);
+    this.getSettings = options.getSettings ?? (async () => {
+      try {
+        const settingsService = new NativeSettingsService();
+        await settingsService.initialize();
+        const settings = await settingsService.get();
+        return {
+          defaultQuality: settings.defaultQuality,
+          defaultVideoFormat: settings.defaultVideoFormat
+        };
+      } catch {
+        return { defaultQuality: "720p", defaultVideoFormat: "mp4" };
+      }
+    });
     this.pollMs = options.pollMs ?? 1000;
     this.logger = options.logger ?? console;
   }
@@ -129,6 +145,8 @@ export class SchedulerBackgroundLoop {
       return;
     }
 
+    const settings = await this.getSettings();
+
     this.attachDownloadListener(downloadService);
     this.getNotificationService()?.notifyScheduledDownload(schedule, metadataItems[0]);
 
@@ -140,8 +158,8 @@ export class SchedulerBackgroundLoop {
         thumbnail: metadata.thumbnail,
         title: metadata.title,
         sourceUrl: metadata.sourceUrl,
-        quality: metadata.qualityOptions[0] ?? metadata.resolution ?? "720p",
-        format: "mp4",
+        quality: settings.defaultQuality,
+        format: settings.defaultVideoFormat,
         fileSize: metadata.fileSize,
         downloadedSize: 0,
         speed: 0,

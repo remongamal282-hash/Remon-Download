@@ -139,10 +139,16 @@ function createWindow(): void {
       schedulerService: sharedSchedulerService,
       getDownloadService: () => nativeDownloadService,
       getNotificationService: () => nativeNotificationService,
+      getSettings: async () => {
+        const settings = await settingsService.get();
+        return {
+          defaultQuality: settings.defaultQuality,
+          defaultVideoFormat: settings.defaultVideoFormat
+        };
+      },
       logger: console
     });
 
-    schedulerLoop.start();
   }
 
   mainWindow.setMenuBarVisibility(false);
@@ -205,6 +211,7 @@ function createWindow(): void {
     schedulerService: sharedSchedulerService,
     onDownloadServiceReady: (service) => {
       nativeDownloadService = service;
+      schedulerLoop?.start();
     },
     onNotificationServiceReady: (service) => {
       nativeNotificationService = service;

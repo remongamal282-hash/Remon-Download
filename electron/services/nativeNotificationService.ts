@@ -2,9 +2,11 @@ import { app, nativeImage, Notification } from "electron";
 import { execFile } from "child_process";
 import { promises as fs } from "fs";
 import * as path from "path";
+import { pathToFileURL } from "url";
 import type { DownloadItem, ScheduledDownload, VideoMetadata } from "../../src/types/download";
 import type { AppSettings } from "../../src/types/settings";
 import type { DownloadStateChangePayload } from "../ipc/channels";
+import { getYouTubeThumbnailFallback } from "../../src/utils/thumbnail";
 
 function escapeXml(value: string): string {
   return value
@@ -34,7 +36,8 @@ async function showWindowsToast(
   );
   await fs.writeFile(imagePath, thumbnail);
 
-  const xml = `<toast><visual><binding template="ToastGeneric"><image placement="appLogoOverride" hint-crop="circle" src="file:///${escapeXml(imagePath.replace(/\\/g, "/"))}"/><text>${escapeXml(title)}</text><text>${escapeXml(body)}</text></binding></visual></toast>`;
+  const imageUri = pathToFileURL(imagePath).toString();
+  const xml = `<toast><visual><binding template="ToastGeneric"><image placement="appLogoOverride" hint-crop="circle" src="${escapeXml(imageUri)}"/><text>${escapeXml(title)}</text><text>${escapeXml(body)}</text></binding></visual></toast>`;
   const script = `Add-Type -AssemblyName System.Runtime.WindowsRuntime; $xml = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime]::new(); $xml.LoadXml('${escapePowerShell(xml)}'); $toast = [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime]::new($xml); [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]::CreateToastNotifier('com.remon.download').Show($toast)`;
   const encodedScript = Buffer.from(script, "utf16le").toString("base64");
 
@@ -48,7 +51,11 @@ async function showWindowsToast(
       );
     });
   } finally {
-    await fs.unlink(imagePath).catch(() => undefined);
+    // Windows notifications read the file after Show() returns.
+    const cleanupTimer = setTimeout(() => {
+      void fs.unlink(imagePath).catch(() => undefined);
+    }, 5 * 60 * 1000);
+    cleanupTimer.unref?.();
   }
 }
 
@@ -83,7 +90,8 @@ export class NativeNotificationService {
         body: this.settings.language === "ar"
           ? "تم تحميل الفيديو بنجاح"
           : "Download completed successfully",
-        thumbnail: item.thumbnail
+        thumbnail: item.thumbnail || undefined,
+        sourceUrl: item.sourceUrl
       });
       return;
     }
@@ -167,11 +175,12 @@ export class NativeNotificationService {
       body: this.settings.language === "ar"
         ? "تمت إضافة التحميل المجدول إلى قائمة التنزيلات"
         : "Scheduled download queued",
-      thumbnail: metadata?.thumbnail
+      thumbnail: metadata?.thumbnail,
+      sourceUrl: metadata?.sourceUrl
     });
   }
 
-  private sendOnce(key: string, options: { title: string; body: string; thumbnail?: string }): void {
+  private sendOnce(key: string, options: { title: string; body: string; thumbnail?: string; sourceUrl?: string }): void {
     if (this.sentKeys.has(key) || this.pendingKeys.has(key)) {
       console.log(`[Notification] Duplicate suppressed: ${key}`);
       return;
@@ -192,14 +201,14 @@ export class NativeNotificationService {
 
   private sendDownloadOnce(
     key: string,
-    options: { title: string; body: string; thumbnail?: string }
+    options: { title: string; body: string; thumbnail?: string; sourceUrl?: string }
   ): void {
     this.sendOnce(key, options);
   }
 
   private showNotification(
     key: string,
-    options: { title: string; body: string; thumbnail?: string; icon?: string }
+    options: { title: string; body: string; thumbnail?: string; sourceUrl?: string; icon?: string }
   ): Promise<void> {
     if (this.sentKeys.has(key)) {
       return Promise.resolve();
@@ -232,18 +241,33 @@ export class NativeNotificationService {
 
         let iconImage: Electron.NativeImage | undefined;
         let thumbnailBuffer: Buffer | undefined;
-        if (options.thumbnail) {
+        const thumbnailCandidates = Array.from(new Set([
+          options.thumbnail
+        ].filter((thumbnail): thumbnail is string => Boolean(thumbnail))));
+
+        const fallbackThumbnail = options.sourceUrl ? getYouTubeThumbnailFallback(options.sourceUrl) : null;
+        if (fallbackThumbnail && !thumbnailCandidates.includes(fallbackThumbnail)) {
+          thumbnailCandidates.push(fallbackThumbnail);
+        }
+
+        for (const thumbnail of thumbnailCandidates) {
           try {
-            const response = await fetch(options.thumbnail);
-            if (response.ok) {
-              thumbnailBuffer = Buffer.from(await response.arrayBuffer());
-              const image = nativeImage.createFromBuffer(
-                thumbnailBuffer
-              );
-              if (!image.isEmpty()) {
-                iconImage = image;
-              }
+            const response = await fetch(thumbnail, {
+              headers: { "user-agent": "Mozilla/5.0" }
+            });
+            if (!response.ok) {
+              continue;
             }
+
+            const candidateBuffer = Buffer.from(await response.arrayBuffer());
+            const image = nativeImage.createFromBuffer(candidateBuffer);
+            if (image.isEmpty()) {
+              continue;
+            }
+
+            thumbnailBuffer = candidateBuffer;
+            iconImage = image;
+            break;
           } catch (error) {
             console.warn(`[Notification] Could not load thumbnail for ${key}:`, error);
           }

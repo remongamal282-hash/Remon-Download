@@ -8,6 +8,7 @@ import { useFavoritesStore } from "../stores/favoritesStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import type { HistoryItem, HistoryStatus } from "../types/download";
 import { formatBytes } from "../utils/format";
+import { getYouTubeThumbnailFallback } from "../utils/thumbnail";
 
 const statusTone: Record<HistoryStatus, string> = {
   completed: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200",
@@ -117,7 +118,19 @@ function HistoryRow({ item }: { item: HistoryItem }) {
       className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
     >
       <div className="grid gap-4 lg:grid-cols-[120px_minmax(0,1fr)_180px] lg:items-center">
-        <img className="aspect-video w-full rounded-md object-cover lg:w-[120px]" src={item.thumbnail} alt="" />
+        <img
+          className="aspect-video w-full rounded-md object-cover lg:w-[120px]"
+          src={item.thumbnail || getYouTubeThumbnailFallback(item.sourceUrl) || ""}
+          alt=""
+          onError={(event) => {
+            const fallback = getYouTubeThumbnailFallback(item.sourceUrl);
+            if (fallback && event.currentTarget.src !== fallback) {
+              event.currentTarget.src = fallback;
+            } else {
+              event.currentTarget.onerror = null;
+            }
+          }}
+        />
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="truncate text-base font-semibold">{item.title}</h2>

@@ -382,7 +382,11 @@ function parsePlaylistMetadata(
 
   const videos = entries
     .map((entry, index) => {
-      const entryUrl = entry.url?.startsWith("http") ? entry.url : undefined;
+      const entryUrl = entry.url?.startsWith("http")
+        ? entry.url
+        : entry.id
+          ? `https://www.youtube.com/watch?v=${entry.id}`
+          : undefined;
       const video = parseVideoMetadata(entry, "playlist-video", index + 1, entryUrl);
       return video.thumbnail ? video : { ...video, thumbnail: playlistThumbnail };
     });
@@ -426,6 +430,7 @@ function parseChannelMetadata(
 
 export class NativeMetadataService {
   private ytdlpPath: string | null = null;
+  private inFlightAnalyses = new Map<string, Promise<AnalysisResult>>();
   private metadataCache = new MetadataCache<AnalysisResult>(
     100,
     1000 * 60 * 60
@@ -534,6 +539,8 @@ export class NativeMetadataService {
         ? PLAYLIST_TIMEOUT_MS
         : YTDLP_TIMEOUT_MS;
 
+      console.log(`[MetadataService] yt-dlp start type=${isPlaylist ? "playlist" : "video"} path=${ytdlpPath} timeoutMs=${timeout} args=${JSON.stringify(args.map((arg) => arg === url ? "<url>" : arg))}`);
+
       const proc = this.executor.spawn(
         ytdlpPath,
         args,
@@ -555,7 +562,7 @@ export class NativeMetadataService {
       });
 
       proc.on("error", (err: any) => {
-        console.error(`[MetadataService] yt-dlp process spawn error (${ytdlpPath}):`, err);
+        console.error(`[MetadataService] yt-dlp process error path=${ytdlpPath} code=${err.code ?? "unknown"} stderr=${stderr.slice(0, 4000)}`, err);
         if (err.code === "ETIMEDOUT") {
           reject(new Error("ytdlp_timeout"));
         } else if (err.code === "ENOENT") {
@@ -566,6 +573,7 @@ export class NativeMetadataService {
       });
 
       proc.on("exit", (code) => {
+        console.log(`[MetadataService] yt-dlp exit code=${code} path=${ytdlpPath} stderr=${stderr.slice(0, 4000)}`);
         if (code === 0) {
           try {
             const parsed = JSON.parse(
@@ -574,11 +582,11 @@ export class NativeMetadataService {
 
             resolve(parsed);
           } catch (jsonErr) {
-            console.error(`[MetadataService] Failed to parse yt-dlp output JSON (${ytdlpPath}):`, jsonErr, `stdout:`, stdout.slice(0, 300));
+            console.error(`[MetadataService] Failed to parse yt-dlp JSON path=${ytdlpPath} stdout=${stdout.slice(0, 1000)}`, jsonErr);
             reject(new Error("ytdlp_invalid_json"));
           }
         } else {
-          console.error(`[MetadataService] yt-dlp exited with non-zero code ${code}. Path: ${ytdlpPath}, Stderr:`, stderr);
+          console.error(`[MetadataService] yt-dlp failed code=${code} path=${ytdlpPath} stderr=${stderr.slice(0, 4000)}`);
           // Map common yt-dlp error messages
           const stderrLower = stderr.toLowerCase();
 
@@ -692,13 +700,32 @@ export class NativeMetadataService {
       return cachedResult;
     }
 
+    const inFlight = this.inFlightAnalyses.get(trimmedUrl);
+    if (inFlight) {
+      console.log(`[MetadataService] Reusing in-flight analysis for ${trimmedUrl}`);
+      return inFlight;
+    }
+
+    const analysis = this.analyzeUncached(trimmedUrl);
+    this.inFlightAnalyses.set(trimmedUrl, analysis);
+    try {
+      return await analysis;
+    } finally {
+      if (this.inFlightAnalyses.get(trimmedUrl) === analysis) {
+        this.inFlightAnalyses.delete(trimmedUrl);
+      }
+    }
+  }
+
+  private async analyzeUncached(trimmedUrl: string): Promise<AnalysisResult> {
+
     // Resolve yt-dlp path (cached after first successful resolution)
     if (!this.ytdlpPath) {
       this.ytdlpPath = await this.resolveYtdlpPath();
     }
 
-    // Classify link type
     const linkType = classifyYouTubeUrl(trimmedUrl);
+    console.log(`[MetadataService] Analyzing ${linkType} URL with resolved path ${this.ytdlpPath}`);
 
     let result: AnalysisResult;
 

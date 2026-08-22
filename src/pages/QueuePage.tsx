@@ -25,6 +25,7 @@ import { useSettingsStore } from "../stores/settingsStore";
 import type { DownloadItem, DownloadStatus } from "../types/download";
 import { MOCK_ERROR_CODES, type AppErrorCode } from "../types/errors";
 import { formatBytes } from "../utils/format";
+import { getYouTubeThumbnailFallback } from "../utils/thumbnail";
 
 const statusTone: Record<DownloadStatus, string> = {
   queued: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
@@ -204,7 +205,19 @@ function QueueRow({ item }: { item: DownloadItem }) {
         >
           <GripVertical aria-hidden="true" size={18} />
         </button>
-        <img className="aspect-video w-full rounded-md object-cover lg:w-[120px]" src={item.thumbnail} alt="" />
+        <img
+          className="aspect-video w-full rounded-md object-cover lg:w-[120px]"
+          src={item.thumbnail || getYouTubeThumbnailFallback(item.sourceUrl) || ""}
+          alt=""
+          onError={(event) => {
+            const fallback = getYouTubeThumbnailFallback(item.sourceUrl);
+            if (fallback && event.currentTarget.src !== fallback) {
+              event.currentTarget.src = fallback;
+            } else {
+              event.currentTarget.onerror = null;
+            }
+          }}
+        />
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="truncate text-base font-semibold">{item.title}</h2>

@@ -72,6 +72,7 @@ describe('SchedulerBackgroundLoop', () => {
     const loop = new SchedulerBackgroundLoop({
       schedulerService: schedulerService as any,
       getDownloadService: () => downloadService as any,
+      getSettings: async () => ({ defaultQuality: '480p', defaultVideoFormat: 'webm' }),
       pollMs: 1000,
     });
 
@@ -81,6 +82,7 @@ describe('SchedulerBackgroundLoop', () => {
     expect(schedulerService.tick).toHaveBeenCalledTimes(1);
     expect(add).toHaveBeenCalledTimes(1);
     expect(start).toHaveBeenCalledWith(expect.any(String));
+    expect(add.mock.calls[0]?.[0]).toMatchObject({ quality: '480p', format: 'webm', status: 'queued' });
     expect(loop.isRunning()).toBe(true);
     loop.stop();
   });

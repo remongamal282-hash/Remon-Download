@@ -141,11 +141,11 @@ describe("NativeNotificationService", () => {
 
     service.handleDownloadStateChange(
       { id: "download-1", status: "completed", progress: 100, downloadedSize: 100, fileSize: 100, speed: 0, eta: "--" },
-      createItem({ title: "" })
+      createItem({ title: "", sourceUrl: "https://example.com/video" })
     );
     service.handleDownloadStateChange(
       { id: "download-2", status: "failed", progress: 0, downloadedSize: 0, fileSize: 100, speed: 0, eta: "--" },
-      createItem({ id: "download-2", title: "Failed Video", status: "failed" })
+      createItem({ id: "download-2", title: "Failed Video", status: "failed", sourceUrl: "https://example.com/video" })
     );
 
     expect(notificationInstances.map((instance) => instance.options)).toEqual([
@@ -293,7 +293,7 @@ describe("NativeNotificationService", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps playlist notifications on the application icon", async () => {
+  it("uses the YouTube thumbnail fallback for playlist videos", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(Uint8Array.from([1, 2, 3]), {
       status: 200,
       headers: { "content-type": "image/jpeg" }
@@ -310,9 +310,11 @@ describe("NativeNotificationService", () => {
       })
     );
 
-    await vi.waitFor(() => expect(notificationConstructor).toHaveBeenCalledTimes(1));
-    expect(nativeImageMock.createFromPath).toHaveBeenCalledTimes(1);
-    expect(nativeImageMock.createFromPath.mock.calls[0]?.[0]).toContain("icon.ico");
+    await vi.waitFor(() => expect(nativeImageMock.createFromBuffer).toHaveBeenCalled());
+    expect(fetch).toHaveBeenCalledWith(
+      "https://i.ytimg.com/vi/playlist-video-2/hqdefault.jpg",
+      { headers: { "user-agent": "Mozilla/5.0" } }
+    );
     vi.unstubAllGlobals();
   });
 
@@ -348,19 +350,20 @@ describe("NativeNotificationService", () => {
     expect(notificationConstructor).not.toHaveBeenCalled();
   });
 
-  it("deduplicates terminal events and allows a new retry lifecycle", () => {
+  it("deduplicates terminal events and allows a new retry lifecycle", async () => {
     const service = new NativeNotificationService(createSettings());
     const completed = { id: "download-1", status: "completed" as const, progress: 100, downloadedSize: 100, fileSize: 100, speed: 0, eta: "--" };
     const failed = { id: "download-1", status: "failed" as const, progress: 10, downloadedSize: 10, fileSize: 100, speed: 0, eta: "--", errorMessage: "Failed" };
     const retrying = { id: "download-1", status: "retrying" as const, progress: 10, downloadedSize: 10, fileSize: 100, speed: 0, eta: "--" };
 
-    service.handleDownloadStateChange(completed, createItem());
-    service.handleDownloadStateChange(completed, createItem());
+    const item = { sourceUrl: "https://example.com/video" };
+    service.handleDownloadStateChange(completed, createItem(item));
+    service.handleDownloadStateChange(completed, createItem(item));
     service.handleDownloadStateChange(retrying, createItem({ status: "retrying" }));
-    service.handleDownloadStateChange(failed, createItem({ status: "failed" }));
-    service.handleDownloadStateChange(failed, createItem({ status: "failed" }));
+    service.handleDownloadStateChange(failed, createItem({ ...item, status: "failed" }));
+    service.handleDownloadStateChange(failed, createItem({ ...item, status: "failed" }));
 
-    expect(notificationConstructor).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(notificationConstructor).toHaveBeenCalledTimes(2));
   });
 
   it("notifies scheduled triggers once per schedule and trigger count", () => {

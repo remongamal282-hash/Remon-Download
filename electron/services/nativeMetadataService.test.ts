@@ -357,6 +357,19 @@ describe("NativeMetadataService — yt-dlp Integration", () => {
       expect(metadataCall?.args).toContain(maliciousUrl);
       expect(metadataCall?.options?.windowsHide).toBe(true);
     });
+
+    it("shares concurrent analysis requests for the same URL", async () => {
+      const service = new NativeMetadataService(undefined, mockExecutor);
+      const url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+
+      const [first, second] = await Promise.all([
+        service.analyze(url),
+        service.analyze(url)
+      ]);
+
+      expect(first).toEqual(second);
+      expect(mockExecutor.spawnCalls.filter((call) => call.args.includes("--dump-single-json"))).toHaveLength(1);
+    });
   });
 
   describe("Shorts URL", () => {
@@ -408,6 +421,7 @@ describe("NativeMetadataService — yt-dlp Integration", () => {
         expect(result.videos).toHaveLength(2);
         expect(result.videos[0]?.title).toBe("Playlist Video 1");
         expect(result.videos[0]?.linkType).toBe("playlist-video");
+        expect(result.videos[0]?.sourceUrl).toBe("https://www.youtube.com/watch?v=video1");
       }
     });
 
